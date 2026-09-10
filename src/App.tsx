@@ -3,8 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
-import { Plus, Trash2, UserPlus, Receipt, DollarSign, Calculator, User, Check } from 'lucide-react';
+import React, { useState, useRef } from 'react';
+import { Plus, Trash2, UserPlus, Receipt, DollarSign, Calculator, User, Check, Download, Loader2 } from 'lucide-react';
+import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas';
 
 type Item = { id: string; name: string; price: number };
 type OrderRow = { id: string; itemId: string; quantity: number };
@@ -26,6 +28,10 @@ export default function App() {
   const [availablePeople, setAvailablePeople] = useState(initialPeople);
   const [personOrders, setPersonOrders] = useState<PersonOrder[]>([]);
   const [deliveryFee, setDeliveryFee] = useState<number>(0);
+
+  // PDF Export
+  const printRef = useRef<HTMLDivElement>(null);
+  const [isExporting, setIsExporting] = useState(false);
 
   // New Item State
   const [newItemName, setNewItemName] = useState('');
@@ -139,17 +145,59 @@ export default function App() {
   const remainingTotal = Math.max(0, grandTotal - paidAmount);
   const paidPeople = personOrders.filter(p => p.isPaid);
 
+  const exportToPDF = async () => {
+    if (!printRef.current) return;
+    setIsExporting(true);
+    try {
+      const canvas = await html2canvas(printRef.current, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: '#ffffff'
+      });
+      
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'px',
+        format: 'a4'
+      });
+      
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+      
+      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+      pdf.save('فاتورة-طلبات-سوفت-روز.pdf');
+    } catch (error) {
+      console.error('Error generating PDF', error);
+      alert('حدث خطأ أثناء إنشاء ملف الـ PDF');
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#fafaf9] font-sans text-gray-800 p-4 md:p-8" dir="rtl">
       <div className="max-w-6xl mx-auto">
         
         {/* Header */}
-        <header className="mb-8">
-          <h1 className="text-3xl md:text-4xl font-bold text-rose-600 flex items-center">
-            <Receipt className="w-8 h-8 ml-3" />
-            طلبات سوفت روز
-          </h1>
-          <p className="text-gray-500 mt-2 text-lg">نظام إدارة طلبات الطعام وتوزيع التكاليف الذكي</p>
+        <header className="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h1 className="text-3xl md:text-4xl font-bold text-rose-600 flex items-center">
+              <Receipt className="w-8 h-8 ml-3" />
+              طلبات سوفت روز
+            </h1>
+            <p className="text-gray-500 mt-2 text-lg">نظام إدارة طلبات الطعام وتوزيع التكاليف الذكي</p>
+          </div>
+          {peopleWithOrders.length > 0 && (
+            <button
+              onClick={exportToPDF}
+              disabled={isExporting}
+              className="bg-gray-900 hover:bg-gray-800 text-white px-5 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-sm disabled:opacity-70 disabled:cursor-not-allowed"
+            >
+              {isExporting ? <Loader2 className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}
+              {isExporting ? 'جاري التحميل...' : 'تصدير كـ PDF'}
+            </button>
+          )}
         </header>
 
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
@@ -331,10 +379,11 @@ export default function App() {
                         </label>
                         <button 
                           onClick={() => removePersonOrder(p.personId)}
-                          className="bg-white border border-gray-200 text-gray-400 hover:text-red-500 hover:border-red-200 hover:bg-red-50 p-2 rounded-xl transition-all"
-                          title="حذف الشخص"
+                          className="bg-white border border-gray-200 text-gray-400 hover:text-red-500 hover:border-red-200 hover:bg-red-50 p-2 rounded-xl transition-all flex items-center gap-2"
+                          title="حذف الشخص من هذه الطلبات"
                         >
                           <Trash2 className="w-5 h-5" />
+                          <span className="hidden sm:inline font-medium text-sm">حذف من الطلبات</span>
                         </button>
                       </div>
                     </div>
@@ -367,18 +416,35 @@ export default function App() {
                                   </select>
                                 </td>
                                 <td className="py-3 px-2">
-                                  <input 
-                                    type="number" 
-                                    min="1"
-                                    value={row.quantity || ''}
-                                    onChange={e => updateOrderRow(p.personId, row.id, { quantity: Number(e.target.value) })}
-                                    className="w-full border border-gray-200 rounded-lg p-2.5 text-center bg-white focus:ring-2 focus:ring-rose-500 focus:border-rose-500 outline-none transition-all"
-                                  />
+                                  <div className="flex items-center justify-center gap-1">
+                                    <button 
+                                      onClick={() => updateOrderRow(p.personId, row.id, { quantity: Math.max(1, row.quantity - 1) })}
+                                      className="w-8 h-8 flex items-center justify-center bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg transition-colors"
+                                    >
+                                      -
+                                    </button>
+                                    <input 
+                                      type="number" 
+                                      min="1"
+                                      value={row.quantity || ''}
+                                      onChange={e => {
+                                        const val = e.target.value === '' ? 0 : Number(e.target.value);
+                                        updateOrderRow(p.personId, row.id, { quantity: val });
+                                      }}
+                                      className="w-14 border border-gray-200 rounded-lg p-1.5 text-center bg-white focus:ring-2 focus:ring-rose-500 focus:border-rose-500 outline-none transition-all"
+                                    />
+                                    <button 
+                                      onClick={() => updateOrderRow(p.personId, row.id, { quantity: row.quantity + 1 })}
+                                      className="w-8 h-8 flex items-center justify-center bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg transition-colors"
+                                    >
+                                      +
+                                    </button>
+                                  </div>
                                 </td>
                                 <td className="py-3 px-2 font-bold text-gray-800 text-center text-lg">{rowTotal} ج</td>
                                 <td className="py-3 px-2 text-left">
-                                  <button onClick={() => removeOrderRow(p.personId, row.id)} className="text-gray-400 hover:text-red-500 transition-colors p-1.5 rounded-lg hover:bg-red-50">
-                                    <Trash2 className="w-5 h-5 mx-auto" />
+                                  <button onClick={() => removeOrderRow(p.personId, row.id)} className="text-gray-400 hover:text-red-500 transition-colors p-1.5 rounded-lg hover:bg-red-50 flex items-center gap-1 mx-auto" title="حذف هذا الصنف من الطلب">
+                                    <Trash2 className="w-5 h-5" />
                                   </button>
                                 </td>
                               </tr>
@@ -494,6 +560,80 @@ export default function App() {
             
           </div>
         </div>
+
+        {/* Hidden Printable PDF Layout */}
+        <div className="absolute top-0 right-0 -z-50 opacity-0 pointer-events-none">
+          <div ref={printRef} className="w-[800px] bg-white p-10 text-gray-900 font-sans" dir="rtl">
+            <div className="text-center mb-8 border-b-2 border-gray-200 pb-6">
+              <h1 className="text-4xl font-bold text-gray-900 mb-2">فاتورة طلبات سوفت روز</h1>
+              <p className="text-gray-500 text-lg font-medium">تاريخ الإصدار: {new Date().toLocaleDateString('ar-EG')}</p>
+            </div>
+
+            <table className="w-full text-right mb-8 border-collapse">
+              <thead>
+                <tr className="bg-gray-100 border-y-2 border-gray-300">
+                  <th className="py-3 px-4 font-bold border-l border-gray-200 text-lg">الاسم</th>
+                  <th className="py-3 px-4 font-bold border-l border-gray-200 text-lg">تفاصيل الطلبات</th>
+                  <th className="py-3 px-4 font-bold border-l border-gray-200 w-32 text-center text-lg">التوصيل</th>
+                  <th className="py-3 px-4 font-bold w-32 text-center text-lg">الإجمالي</th>
+                </tr>
+              </thead>
+              <tbody>
+                {peopleWithOrders.map(p => {
+                  const pTotal = getOrdersTotal(p);
+                  const pHasOrders = hasOrders(p);
+                  const pFinalTotal = pTotal + (pHasOrders ? deliveryShare : 0);
+                  if (!pHasOrders) return null;
+                  
+                  return (
+                    <tr key={p.personId} className="border-b border-gray-200">
+                      <td className="py-4 px-4 font-bold align-top border-l border-gray-200 text-lg">{p.personName}</td>
+                      <td className="py-4 px-4 align-top border-l border-gray-200">
+                        <ul className="space-y-2">
+                          {p.rows.filter(r => r.itemId && r.quantity > 0).map(r => {
+                            const item = items.find(i => i.id === r.itemId);
+                            if (!item) return null;
+                            return (
+                              <li key={r.id} className="flex justify-between text-base">
+                                <span>{item.name} <span className="text-gray-400 mx-1">×</span> {r.quantity}</span>
+                                <span className="font-bold">{item.price * r.quantity} ج</span>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </td>
+                      <td className="py-4 px-4 align-middle text-center border-l border-gray-200 font-bold text-lg text-gray-600">
+                        {pHasOrders ? deliveryShare.toFixed(2) : 0} ج
+                      </td>
+                      <td className="py-4 px-4 align-middle text-center font-bold text-2xl">
+                        {pFinalTotal.toFixed(2)} ج
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+
+            <div className="flex justify-end mt-8">
+              <div className="w-96 bg-gray-50 p-6 rounded-2xl border-2 border-gray-200">
+                <h3 className="text-2xl font-bold mb-4 border-b pb-3 border-gray-200">ملخص الحساب</h3>
+                <div className="flex justify-between mb-3 text-gray-700 text-lg font-medium">
+                  <span>إجمالي قيمة الطلبات:</span>
+                  <span className="font-bold">{totalOrdersValue.toFixed(2)} ج</span>
+                </div>
+                <div className="flex justify-between mb-3 text-gray-700 text-lg font-medium">
+                  <span>إجمالي التوصيل:</span>
+                  <span className="font-bold">{deliveryFee} ج</span>
+                </div>
+                <div className="flex justify-between mt-5 pt-5 border-t-2 border-gray-900 text-2xl font-bold">
+                  <span>الإجمالي العام:</span>
+                  <span>{grandTotal.toFixed(2)} ج</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
       </div>
     </div>
   );
