@@ -10,7 +10,7 @@ import { collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, query, where
 const ORG_NAME = "soft-rose";
 
 type Item = { id: string; name: string; price: number };
-type OrderRow = { id: string; itemId: string; quantity: number };
+type OrderRow = { id: string; itemId: string; quantity: number; price?: number };
 type Person = { id: string; name: string };
 type PersonOrder = { 
   personId: string; 
@@ -40,6 +40,9 @@ export default function App() {
   
   // Modal state
   const [modalPersonId, setModalPersonId] = useState<string | null>(null);
+  const [showSummaryModal, setShowSummaryModal] = useState(false);
+  const [isExportingSummary, setIsExportingSummary] = useState(false);
+  const summaryPrintRef = useRef<HTMLDivElement>(null);
 
   const [isExporting, setIsExporting] = useState(false);
   const printRef = useRef<HTMLDivElement>(null);
@@ -89,6 +92,14 @@ export default function App() {
       setNewItemPrice('');
     } catch (e) {
       handleFirestoreError(e, OperationType.CREATE, 'items');
+    }
+  };
+
+  const handleUpdateItem = async (id: string, updates: Partial<Item>) => {
+    try {
+      await updateDoc(doc(db, 'items', id), updates);
+    } catch (e) {
+      handleFirestoreError(e, OperationType.UPDATE, 'items');
     }
   };
 
@@ -182,11 +193,35 @@ export default function App() {
   const getOrdersTotal = (order: PersonOrder) => {
     return order.rows.reduce((sum, row) => {
       const item = items.find(i => i.id === row.itemId);
-      return sum + (item ? item.price * row.quantity : 0);
+      const price = row.price !== undefined ? row.price : (item ? item.price : 0);
+      return sum + (price * row.quantity);
     }, 0);
   };
   
   const hasOrders = (order: PersonOrder) => order.rows.some(r => r.itemId && r.quantity > 0);
+
+  const exportSummaryToPDF = async () => {
+    if (!summaryPrintRef.current) return;
+    setIsExportingSummary(true);
+    try {
+      const canvas = await html2canvas(summaryPrintRef.current, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+      });
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+      pdf.save('ملخص-اوردار.pdf');
+    } catch (error) {
+      console.error('Error generating Summary PDF', error);
+      alert('حدث خطأ أثناء تصدير ملف الـ PDF');
+    } finally {
+      setIsExportingSummary(false);
+    }
+  };
 
   const exportToPDF = async () => {
     if (!printRef.current) return;
@@ -265,7 +300,7 @@ export default function App() {
           <div className="bg-rose-50 w-20 h-20 mx-auto rounded-full flex items-center justify-center mb-6">
             <LogIn className="w-10 h-10 text-rose-500" />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900 mb-2">طلبات سوفت روز</h1>
+          <h1 className="text-2xl font-bold text-gray-900 mb-2">اوردار</h1>
           <p className="text-gray-500 mb-8">يُرجى إدخال كلمة المرور للوصول إلى النظام</p>
           <div className="flex flex-col gap-4">
             <input
@@ -306,6 +341,33 @@ export default function App() {
   const remainingTotal = Math.max(0, grandTotal - paidAmount);
   const paidOrders = activeOrders.filter(o => o.isPaid);
 
+  const getGlobalItemsSummary = () => {
+    const summary: Record<string, { name: string; quantity: number; totalValue: number }> = {};
+    let totalSandwiches = 0;
+    let totalValueAll = 0;
+
+    activeOrders.forEach(order => {
+      order.rows.forEach(row => {
+        if (row.itemId && row.quantity > 0) {
+          const itemBase = items.find(i => i.id === row.itemId);
+          if (itemBase) {
+            const price = row.price !== undefined ? row.price : itemBase.price;
+            if (!summary[row.itemId]) {
+              summary[row.itemId] = { name: itemBase.name, quantity: 0, totalValue: 0 };
+            }
+            summary[row.itemId].quantity += row.quantity;
+            summary[row.itemId].totalValue += (price * row.quantity);
+            
+            totalSandwiches += row.quantity;
+            totalValueAll += (price * row.quantity);
+          }
+        }
+      });
+    });
+    return { summary: Object.values(summary), totalSandwiches, totalValueAll };
+  };
+  const itemsSummaryData = getGlobalItemsSummary();
+
   return (
     <div className="min-h-screen bg-[#fafaf9] font-sans text-gray-800 p-2 sm:p-4 md:p-8 overflow-hidden" dir="rtl">
       <div className="max-w-6xl mx-auto w-full">
@@ -317,10 +379,9 @@ export default function App() {
               <span className="bg-gray-900 text-white p-2 rounded-2xl shadow-md">
                 <Receipt className="w-8 h-8" />
               </span>
-              طلبات سوفت روز
+              اوردار
             </h1>
-            <p className="text-gray-500 mt-2 text-lg">نظام إدارة طلبات الطعام وتوزيع التكاليف الذكي</p>
-          </div>
+                      </div>
           <div className="flex flex-col sm:flex-row gap-2 mt-4 sm:mt-0 items-center">
             <button onClick={() => { setIsAuthenticated(false); setPasswordInput(''); }} className="text-gray-500 hover:text-gray-700 bg-gray-100 px-4 py-3 rounded-xl font-medium flex items-center gap-2 w-full justify-center sm:w-auto">
               <LogOut className="w-5 h-5" />
@@ -378,10 +439,19 @@ export default function App() {
             {/* Active Orders Dashboard */}
             <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 lg:p-7">
               <div className="flex flex-col sm:flex-row justify-between sm:items-center mb-6 gap-4">
-                <h2 className="text-xl font-bold text-gray-800 flex items-center">
-                  <Receipt className="w-5 h-5 ml-2 text-rose-500" />
-                  ملخص الطلبات الحالية
-                </h2>
+                <div className="flex items-center justify-between sm:justify-start gap-4">
+                  <h2 className="text-xl font-bold text-gray-800 flex items-center">
+                    <Receipt className="w-5 h-5 ml-2 text-rose-500" />
+                    ملخص الطلبات الحالية
+                  </h2>
+                  <button 
+                    onClick={() => setShowSummaryModal(true)}
+                    className="bg-indigo-100 text-indigo-700 hover:bg-indigo-200 px-3 py-1.5 rounded-lg font-bold text-sm transition-colors flex items-center gap-1"
+                  >
+                    <FileSpreadsheet className="w-4 h-4" />
+                    ملخص
+                  </button>
+                </div>
                 <div className="w-full sm:w-64">
                   <select 
                     value=""
@@ -533,7 +603,20 @@ export default function App() {
                   {items.map(item => (
                     <li key={item.id} className="flex justify-between items-center bg-white p-3 rounded-lg border border-gray-100 shadow-sm hover:border-rose-200 transition-colors">
                       <div className="flex-1 font-medium text-gray-700 truncate pr-2">{item.name}</div>
-                      <div className="font-bold text-gray-900 bg-gray-100 px-3 py-1 rounded-lg ml-3 shrink-0">{item.price} ج</div>
+                      <div className="font-bold text-gray-900 bg-gray-100 px-2 py-1 rounded-lg ml-3 shrink-0 flex items-center">
+                        <input 
+                          type="number" 
+                          defaultValue={item.price} 
+                          onBlur={e => {
+                            const newPrice = Number(e.target.value);
+                            if (!isNaN(newPrice) && newPrice !== item.price && newPrice >= 0) {
+                               handleUpdateItem(item.id, { price: newPrice });
+                            }
+                          }}
+                          className="w-12 sm:w-16 bg-transparent text-center outline-none font-bold"
+                        />
+                        <span>ج</span>
+                      </div>
                       <button onClick={() => handleRemoveItem(item.id)} className="text-gray-400 hover:text-red-500 transition-colors p-2 rounded-lg hover:bg-red-50 shrink-0">
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -579,15 +662,19 @@ export default function App() {
               <div className="p-3 sm:p-6 overflow-y-auto flex-1 bg-[#fafaf9]">
                 <div className="space-y-3 mb-6">
                   {orders.find(o => o.personId === modalPersonId)?.rows.map((row, index) => {
-                    const rowPrice = items.find(i => i.id === row.itemId)?.price || 0;
+                    const itemBasePrice = items.find(i => i.id === row.itemId)?.price || 0;
+                    const rowPrice = row.price !== undefined ? row.price : itemBasePrice;
                     return (
-                      <div key={row.id} className="flex flex-row items-center gap-2 sm:gap-3 bg-white p-2.5 sm:p-3 rounded-xl border border-gray-200 shadow-sm">
+                      <div key={row.id} className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 bg-white p-2.5 sm:p-3 rounded-xl border border-gray-200 shadow-sm">
                         
-                        <div className="flex items-center gap-1 sm:gap-2 flex-[2] min-w-0">
+                        <div className="flex items-center gap-1 sm:gap-2 w-full sm:flex-[2] min-w-0">
                           <span className="font-bold text-gray-400 text-xs sm:text-sm px-1 sm:px-2 w-4 sm:w-6 shrink-0">{index + 1}</span>
                           <select 
                             value={row.itemId} 
-                            onChange={e => handleUpdateOrderRow(modalPersonId, row.id, { itemId: e.target.value })}
+                            onChange={e => {
+                              const selectedItem = items.find(i => i.id === e.target.value);
+                              handleUpdateOrderRow(modalPersonId, row.id, { itemId: e.target.value, price: selectedItem?.price || 0 });
+                            }}
                             className="w-full p-2 sm:p-2.5 border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-rose-500 font-medium text-sm sm:text-base bg-gray-50 truncate"
                           >
                             <option value="">اختر الصنف...</option>
@@ -597,28 +684,41 @@ export default function App() {
                           </select>
                         </div>
                         
-                        <div className="flex items-center gap-1 sm:gap-2 shrink-0">
-                          <span className="text-xs sm:text-sm font-medium text-gray-500 hidden sm:inline">العدد:</span>
-                          <input 
-                            type="number" 
-                            min="1" 
-                            value={row.quantity || ''} 
-                            onChange={e => handleUpdateOrderRow(modalPersonId, row.id, { quantity: Number(e.target.value) || 0 })}
-                            className="w-14 sm:w-16 p-2 sm:p-2.5 border border-gray-300 rounded-lg text-center outline-none focus:ring-2 focus:ring-rose-500 font-bold bg-gray-50" 
-                          />
+                        <div className="flex items-center gap-1 sm:gap-2 w-full sm:w-auto justify-end mt-1 sm:mt-0">
+                          <div className="flex items-center gap-1 shrink-0">
+                            <span className="text-xs sm:text-sm font-medium text-gray-500 hidden sm:inline">العدد:</span>
+                            <input 
+                              type="number" 
+                              min="1" 
+                              value={row.quantity || ''} 
+                              onChange={e => handleUpdateOrderRow(modalPersonId, row.id, { quantity: Number(e.target.value) || 0 })}
+                              className="w-12 sm:w-14 p-2 sm:p-2.5 border border-gray-300 rounded-lg text-center outline-none focus:ring-2 focus:ring-rose-500 font-bold bg-gray-50" 
+                            />
+                          </div>
+
+                          <div className="flex items-center gap-1 shrink-0">
+                            <span className="text-xs sm:text-sm font-medium text-gray-500 hidden sm:inline">السعر:</span>
+                            <input 
+                              type="number" 
+                              min="0" 
+                              value={rowPrice} 
+                              onChange={e => handleUpdateOrderRow(modalPersonId, row.id, { price: Number(e.target.value) || 0 })}
+                              className="w-14 sm:w-16 p-2 sm:p-2.5 border border-gray-300 rounded-lg text-center outline-none focus:ring-2 focus:ring-rose-500 font-bold bg-gray-50" 
+                            />
+                          </div>
+                          
+                          <div className="shrink-0 w-16 sm:w-20 text-center font-bold text-sm sm:text-lg text-gray-800 bg-gray-100 p-2 rounded-lg border border-gray-200 whitespace-nowrap">
+                            {rowPrice * row.quantity} ج
+                          </div>
+                          
+                          <button 
+                            onClick={() => handleRemoveOrderRow(modalPersonId, row.id)}
+                            className="p-2 text-red-500 hover:bg-red-100 rounded-lg shrink-0 transition-colors bg-red-50/50"
+                            title="حذف هذا الصنف"
+                          >
+                            <Trash2 className="w-4 h-4 sm:w-5 sm:h-5" />
+                          </button>
                         </div>
-                        
-                        <div className="shrink-0 w-20 sm:w-24 text-center font-bold text-base sm:text-lg text-gray-800 bg-gray-100 p-2 rounded-lg border border-gray-200 whitespace-nowrap">
-                          {rowPrice * row.quantity} ج
-                        </div>
-                        
-                        <button 
-                          onClick={() => handleRemoveOrderRow(modalPersonId, row.id)}
-                          className="p-2 text-red-500 hover:bg-red-100 rounded-lg shrink-0 transition-colors bg-red-50/50"
-                          title="حذف هذا الصنف"
-                        >
-                          <Trash2 className="w-4 h-4 sm:w-5 sm:h-5" />
-                        </button>
                       </div>
                     );
                   })}
@@ -696,11 +796,107 @@ export default function App() {
           </div>
         )}
 
+        {showSummaryModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/60 backdrop-blur-sm p-2 sm:p-4">
+            <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[95vh] sm:max-h-[90vh] animate-in fade-in zoom-in-95 duration-200">
+              <div className="flex justify-between items-center p-4 sm:p-6 border-b border-gray-100 bg-gray-50/80">
+                <h2 className="text-xl sm:text-2xl font-bold flex items-center gap-3">
+                  <div className="bg-indigo-100 p-2 rounded-xl hidden sm:block">
+                    <FileSpreadsheet className="w-6 h-6 text-indigo-600" />
+                  </div>
+                  ملخص الأصناف المطلوبة
+                </h2>
+                <button onClick={() => setShowSummaryModal(false)} className="p-2 hover:bg-gray-200 bg-gray-100 rounded-full transition-colors text-gray-600">
+                  <X className="w-5 h-5 sm:w-6 sm:h-6" />
+                </button>
+              </div>
+              
+              <div className="p-4 sm:p-6 overflow-y-auto flex-1 bg-[#fafaf9]">
+                {itemsSummaryData.summary.length === 0 ? (
+                  <p className="text-center text-gray-500 py-10">لا توجد أصناف مطلوبة حالياً.</p>
+                ) : (
+                  <div className="space-y-3">
+                    {itemsSummaryData.summary.map((item, idx) => (
+                      <div key={idx} className="flex flex-col sm:flex-row sm:justify-between sm:items-center bg-white p-3 sm:p-4 rounded-xl border border-gray-200 shadow-sm gap-2">
+                        <span className="font-bold text-lg text-gray-800">{item.name}</span>
+                        <div className="flex justify-between sm:justify-end gap-4 w-full sm:w-auto">
+                          <span className="text-gray-600 font-medium">العدد: <span className="font-bold text-indigo-600 text-lg">{item.quantity}</span></span>
+                          <span className="text-gray-600 font-medium sm:w-24 text-left">القيمة: <span className="font-bold text-gray-900 text-lg">{item.totalValue} ج</span></span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              
+              <div className="bg-gray-100 p-4 sm:p-6 border-t border-gray-200 rounded-b-3xl">
+                <div className="grid grid-cols-2 gap-4 mb-4">
+                  <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm text-center">
+                    <div className="text-gray-500 text-sm font-medium mb-1">إجمالي العدد</div>
+                    <div className="text-2xl font-bold text-indigo-600">{itemsSummaryData.totalSandwiches}</div>
+                  </div>
+                  <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm text-center">
+                    <div className="text-gray-500 text-sm font-medium mb-1">إجمالي القيمة</div>
+                    <div className="text-2xl font-bold text-gray-900">{itemsSummaryData.totalValueAll} ج</div>
+                  </div>
+                </div>
+                <button 
+                  onClick={exportSummaryToPDF}
+                  disabled={isExportingSummary || itemsSummaryData.summary.length === 0}
+                  className="w-full bg-gray-900 hover:bg-gray-800 text-white font-bold py-4 rounded-xl transition-colors flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
+                >
+                  {isExportingSummary ? <Loader2 className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}
+                  تصدير PDF
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Hidden Printable PDF Layout */}
         <div className="absolute top-0 right-0 -z-50 opacity-0 pointer-events-none overflow-hidden h-0 w-0">
+          
+          <div ref={summaryPrintRef} className="w-[800px] h-auto p-10 font-sans" dir="rtl" style={{ backgroundColor: '#ffffff', color: '#111827' }}>
+            <div className="text-center mb-8 border-b-2 pb-6" style={{ borderColor: '#e5e7eb' }}>
+              <h1 className="text-4xl font-bold mb-2" style={{ color: '#111827' }}>ملخص اوردار</h1>
+              <p className="text-lg font-medium" style={{ color: '#6b7280' }}>تاريخ الإصدار: {new Date().toLocaleDateString('ar-EG')}</p>
+            </div>
+            <table className="w-full text-right mb-8 border-collapse">
+              <thead>
+                <tr className="border-y-2" style={{ backgroundColor: '#f3f4f6', borderColor: '#d1d5db' }}>
+                  <th className="py-3 px-4 font-bold border-l text-lg" style={{ borderColor: '#e5e7eb' }}>الصنف</th>
+                  <th className="py-3 px-4 font-bold border-l text-center text-lg w-32" style={{ borderColor: '#e5e7eb' }}>العدد</th>
+                  <th className="py-3 px-4 font-bold text-center text-lg w-40">القيمة</th>
+                </tr>
+              </thead>
+              <tbody>
+                {itemsSummaryData.summary.map((item, idx) => (
+                  <tr key={idx} className="border-b" style={{ borderColor: '#e5e7eb' }}>
+                    <td className="py-4 px-4 font-bold align-middle border-l text-lg" style={{ borderColor: '#e5e7eb' }}>{item.name}</td>
+                    <td className="py-4 px-4 align-middle text-center border-l font-bold text-xl" style={{ borderColor: '#e5e7eb', color: '#4f46e5' }}>{item.quantity}</td>
+                    <td className="py-4 px-4 align-middle text-center font-bold text-xl">{item.totalValue} ج</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="flex justify-end mt-8">
+              <div className="w-96 p-6 rounded-2xl border-2" style={{ backgroundColor: '#f9fafb', borderColor: '#e5e7eb' }}>
+                <h3 className="text-2xl font-bold mb-4 border-b pb-3" style={{ borderColor: '#e5e7eb' }}>الإجماليات</h3>
+                <div className="flex justify-between mb-3 text-lg font-medium" style={{ color: '#374151' }}>
+                  <span>إجمالي العدد:</span>
+                  <span className="font-bold" style={{ color: '#4f46e5' }}>{itemsSummaryData.totalSandwiches}</span>
+                </div>
+                <div className="flex justify-between mt-5 pt-5 border-t-2 text-2xl font-bold" style={{ borderColor: '#111827' }}>
+                  <span>إجمالي القيمة:</span>
+                  <span>{itemsSummaryData.totalValueAll} ج</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div ref={printRef} className="w-[800px] h-auto p-10 font-sans" dir="rtl" style={{ backgroundColor: '#ffffff', color: '#111827' }}>
             <div className="text-center mb-8 border-b-2 pb-6" style={{ borderColor: '#e5e7eb' }}>
-              <h1 className="text-4xl font-bold mb-2" style={{ color: '#111827' }}>فاتورة طلبات سوفت روز</h1>
+              <h1 className="text-4xl font-bold mb-2" style={{ color: '#111827' }}>فاتورة اوردار</h1>
               <p className="text-lg font-medium" style={{ color: '#6b7280' }}>تاريخ الإصدار: {new Date().toLocaleDateString('ar-EG')}</p>
             </div>
             <table className="w-full text-right mb-8 border-collapse">
@@ -732,7 +928,7 @@ export default function App() {
                             return (
                               <li key={r.id} className="flex justify-between text-base">
                                 <span>{item.name} <span className="mx-1" style={{ color: '#9ca3af' }}>×</span> {r.quantity}</span>
-                                <span className="font-bold">{item.price * r.quantity} ج</span>
+                                <span className="font-bold">{(r.price !== undefined ? r.price : item.price) * r.quantity} ج</span>
                               </li>
                             );
                           })}
