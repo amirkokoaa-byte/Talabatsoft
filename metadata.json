@@ -1,0 +1,8 @@
+{
+  "name": "طلبات سوفت روز",
+  "description": "تطبيق إدارة طلبات الطعام، حساب التكاليف، وإدارة الدليفري لفرق العمل.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
