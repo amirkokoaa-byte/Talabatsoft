@@ -71,5 +71,13 @@ service cloud.firestore {
       allow update: if isSignedIn() && isValidId(sessionId) && isValidSession(incoming()) && incoming().organization == existing().organization;
       allow delete: if isSignedIn() && resource.data.organization == "soft-rose";
     }
+    
+    // History
+    match /history/{historyId} {
+      allow read, list: if isSignedIn() && resource.data.organization == "soft-rose";
+      allow create: if isSignedIn() && isValidId(historyId) && incoming().organization == "soft-rose";
+      allow update: if isSignedIn() && isValidId(historyId) && incoming().organization == existing().organization;
+      allow delete: if isSignedIn() && resource.data.organization == "soft-rose";
+    }
   }
 }
