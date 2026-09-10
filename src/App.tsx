@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, Trash2, UserPlus, Receipt, DollarSign, Calculator, User, Check, Download, Loader2, FileSpreadsheet, LogIn, LogOut, X, Menu, Save, Archive } from 'lucide-react';
+import { Plus, Trash2, UserPlus, Receipt, DollarSign, Calculator, User, Check, Download, Loader2, FileSpreadsheet, LogIn, LogOut, X, Menu, Save, Archive, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import * as XLSX from 'xlsx';
@@ -51,9 +51,12 @@ export default function App() {
   const [modalPersonId, setModalPersonId] = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [historyList, setHistoryList] = useState<HistorySession[]>([]);
+  const [expandedHistory, setExpandedHistory] = useState<Record<string, boolean>>({});
   const [showSummaryModal, setShowSummaryModal] = useState(false);
   const [isExportingSummary, setIsExportingSummary] = useState(false);
   const summaryPrintRef = useRef<HTMLDivElement>(null);
+  const [isExportingSingleOrder, setIsExportingSingleOrder] = useState(false);
+  const singleOrderPrintRef = useRef<HTMLDivElement>(null);
 
   const [isExporting, setIsExporting] = useState(false);
   const printRef = useRef<HTMLDivElement>(null);
@@ -219,6 +222,19 @@ export default function App() {
   
   const hasOrders = (order: PersonOrder) => order.rows.some(r => r.itemId && r.quantity > 0);
 
+  const handleStartNewOrder = async () => {
+    if (!window.confirm("هل أنت متأكد من مسح جميع الطلبات الحالية للبدء في أوردار جديد؟ (لن يتم حذف الأسماء)")) return;
+    try {
+      await updateDoc(doc(db, 'sessions', 'global'), { deliveryFee: 0 });
+      const promises = orders.map(o => 
+        updateDoc(doc(db, 'orders', o.personId), { rows: [], isPaid: false, paidAmount: 0 })
+      );
+      await Promise.all(promises);
+    } catch (e) {
+      console.error("Error clearing orders", e);
+    }
+  };
+
   const handleSaveCurrentOrders = async () => {
     if (activeOrders.length === 0) return;
     const snapshotOrders = activeOrders.map(o => {
@@ -264,6 +280,30 @@ export default function App() {
       alert('تم حفظ الطلبات بنجاح في القائمة الجانبية');
     } catch (e) {
       handleFirestoreError(e, OperationType.CREATE, 'history');
+    }
+  };
+
+  const exportSingleOrderToPDF = async () => {
+    if (!singleOrderPrintRef.current) return;
+    setIsExportingSingleOrder(true);
+    try {
+      const canvas = await html2canvas(singleOrderPrintRef.current, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+      });
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a5' });
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+      const personName = people.find(p => p.id === modalPersonId)?.name || 'اوردار';
+      pdf.save(`طلب-${personName}.pdf`);
+    } catch (error) {
+      console.error('Error generating Single PDF', error);
+      alert('حدث خطأ أثناء تصدير ملف الـ PDF');
+    } finally {
+      setIsExportingSingleOrder(false);
     }
   };
 
@@ -516,13 +556,22 @@ export default function App() {
                     <Receipt className="w-5 h-5 ml-2 text-rose-500" />
                     ملخص الطلبات الحالية
                   </h2>
-                  <button 
-                    onClick={() => setShowSummaryModal(true)}
-                    className="bg-indigo-100 text-indigo-700 hover:bg-indigo-200 px-3 py-1.5 rounded-lg font-bold text-sm transition-colors flex items-center gap-1"
-                  >
-                    <FileSpreadsheet className="w-4 h-4" />
-                    ملخص
-                  </button>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => setShowSummaryModal(true)}
+                      className="bg-indigo-100 text-indigo-700 hover:bg-indigo-200 px-3 py-1.5 rounded-lg font-bold text-sm transition-colors flex items-center gap-1"
+                    >
+                      <FileSpreadsheet className="w-4 h-4" />
+                      ملخص
+                    </button>
+                    <button 
+                      onClick={handleStartNewOrder}
+                      className="bg-emerald-100 text-emerald-700 hover:bg-emerald-200 px-3 py-1.5 rounded-lg font-bold text-sm transition-colors flex items-center gap-1"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                      اوردار جديد
+                    </button>
+                  </div>
                 </div>
                 <div className="w-full sm:w-64">
                   <select 
@@ -741,16 +790,25 @@ export default function App() {
             ) : (
               historyList.map(session => (
                 <div key={session.id} className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                  <div className="p-4 bg-gray-50 border-b border-gray-100 flex justify-between items-center">
-                    <div>
-                      <div className="font-bold text-gray-800 text-lg">{session.date}</div>
-                      <div className="text-sm text-gray-500">{new Date(session.timestamp).toLocaleTimeString('ar-EG')}</div>
+                  <div 
+                    onClick={() => setExpandedHistory(prev => ({ ...prev, [session.id]: !prev[session.id] }))}
+                    className="p-4 bg-gray-50 border-b border-gray-100 flex justify-between items-center cursor-pointer hover:bg-gray-100 transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="bg-indigo-100 text-indigo-600 p-1 rounded">
+                        {expandedHistory[session.id] ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+                      </div>
+                      <div>
+                        <div className="font-bold text-gray-800 text-lg">{session.date}</div>
+                        <div className="text-sm text-gray-500">{new Date(session.timestamp).toLocaleTimeString('ar-EG')}</div>
+                      </div>
                     </div>
                     <div className="text-left">
                       <div className="font-bold text-indigo-600 text-lg">{session.grandTotal.toFixed(2)} ج</div>
                       <div className="text-xs text-gray-500 font-bold">{session.orders.length} طلبات</div>
                     </div>
                   </div>
+                  {expandedHistory[session.id] && (
                   <div className="p-4 space-y-4">
                     {session.orders.map((o, i) => (
                       <div key={i} className="border-b border-gray-100 last:border-0 pb-3 last:pb-0">
@@ -775,6 +833,7 @@ export default function App() {
                       </div>
                     ))}
                   </div>
+                  )}
                 </div>
               ))
             )}
@@ -1009,6 +1068,68 @@ export default function App() {
         {/* Hidden Printable PDF Layout */}
         <div className="absolute top-0 right-0 -z-50 opacity-0 pointer-events-none overflow-hidden h-0 w-0">
           
+          <div ref={singleOrderPrintRef} className="w-[600px] h-auto p-8 font-sans" dir="rtl" style={{ backgroundColor: '#ffffff', color: '#111827' }}>
+            {(() => {
+              const order = orders.find(o => o.personId === modalPersonId);
+              const p = people.find(person => person.id === modalPersonId);
+              if (!order || !p) return null;
+              
+              const pTotal = getOrdersTotal(order);
+              const pHasOrders = hasOrders(order);
+              const pFinalTotal = pTotal + (pHasOrders ? deliveryShare : 0);
+              
+              return (
+                <div className="flex flex-col h-full">
+                  <div className="text-center mb-6 border-b-2 pb-4" style={{ borderColor: '#e5e7eb' }}>
+                    <h1 className="text-3xl font-bold mb-2" style={{ color: '#111827' }}>تفاصيل طلب: {p.name}</h1>
+                    <p className="text-base font-medium" style={{ color: '#6b7280' }}>تاريخ الإصدار: {new Date().toLocaleDateString('ar-EG')}</p>
+                  </div>
+                  <table className="w-full text-right mb-6 border-collapse">
+                    <thead>
+                      <tr className="border-y-2" style={{ backgroundColor: '#f3f4f6', borderColor: '#d1d5db' }}>
+                        <th className="py-2 px-3 font-bold border-l text-lg" style={{ borderColor: '#e5e7eb' }}>الصنف</th>
+                        <th className="py-2 px-3 font-bold border-l text-center text-lg w-20" style={{ borderColor: '#e5e7eb' }}>العدد</th>
+                        <th className="py-2 px-3 font-bold text-center text-lg w-28">القيمة</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {order.rows.filter(r => r.itemId && r.quantity > 0).map((r, idx) => {
+                        const item = items.find(i => i.id === r.itemId);
+                        if (!item) return null;
+                        const price = r.price !== undefined ? r.price : item.price;
+                        return (
+                          <tr key={idx} className="border-b" style={{ borderColor: '#e5e7eb' }}>
+                            <td className="py-3 px-3 font-bold align-middle border-l text-lg" style={{ borderColor: '#e5e7eb' }}>{item.name}</td>
+                            <td className="py-3 px-3 align-middle text-center border-l font-bold text-lg" style={{ borderColor: '#e5e7eb' }}>{r.quantity}</td>
+                            <td className="py-3 px-3 align-middle text-center font-bold text-lg">{price * r.quantity} ج</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  <div className="flex justify-end">
+                    <div className="w-72 p-4 rounded-xl border-2" style={{ backgroundColor: '#f9fafb', borderColor: '#e5e7eb' }}>
+                      <div className="flex justify-between mb-2 text-base font-medium" style={{ color: '#374151' }}>
+                        <span>إجمالي الطلبات:</span>
+                        <span className="font-bold">{pTotal} ج</span>
+                      </div>
+                      {pHasOrders && deliveryShare > 0 && (
+                        <div className="flex justify-between mb-2 text-base font-medium" style={{ color: '#374151' }}>
+                          <span>التوصيل:</span>
+                          <span className="font-bold">{deliveryShare.toFixed(2)} ج</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between mt-3 pt-3 border-t-2 text-xl font-bold" style={{ borderColor: '#111827' }}>
+                        <span>الإجمالي المطلوب:</span>
+                        <span>{pFinalTotal.toFixed(2)} ج</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+
           <div ref={summaryPrintRef} className="w-[800px] h-auto p-10 font-sans" dir="rtl" style={{ backgroundColor: '#ffffff', color: '#111827' }}>
             <div className="text-center mb-8 border-b-2 pb-6" style={{ borderColor: '#e5e7eb' }}>
               <h1 className="text-4xl font-bold mb-2" style={{ color: '#111827' }}>ملخص اوردار</h1>
