@@ -176,8 +176,8 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#fafaf9] font-sans text-gray-800 p-4 md:p-8" dir="rtl">
-      <div className="max-w-6xl mx-auto">
+    <div className="min-h-screen bg-[#fafaf9] font-sans text-gray-800 p-2 sm:p-4 md:p-8 overflow-hidden" dir="rtl">
+      <div className="max-w-6xl mx-auto w-full">
         
         {/* Header */}
         <header className="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -280,29 +280,31 @@ export default function App() {
                 إدارة الأصناف
               </h2>
               
-              <div className="flex gap-2 mb-4">
+              <div className="flex flex-col sm:flex-row gap-2 mb-4">
                 <input 
                   type="text" 
                   placeholder="اسم الصنف"
                   value={newItemName}
                   onChange={e => setNewItemName(e.target.value)}
-                  className="flex-[2] border border-gray-200 rounded-xl p-2.5 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-rose-500 outline-none transition-all min-w-0"
+                  className="w-full sm:flex-[2] border border-gray-200 rounded-xl p-2.5 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-rose-500 outline-none transition-all min-w-0"
                   onKeyDown={e => e.key === 'Enter' && handleAddItem()}
                 />
-                <input 
-                  type="number" 
-                  placeholder="السعر"
-                  value={newItemPrice}
-                  onChange={e => setNewItemPrice(e.target.value)}
-                  className="flex-[1] border border-gray-200 rounded-xl p-2.5 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-rose-500 outline-none transition-all min-w-0 text-center"
-                  onKeyDown={e => e.key === 'Enter' && handleAddItem()}
-                />
-                <button 
-                  onClick={handleAddItem}
-                  className="bg-rose-500 text-white hover:bg-rose-600 px-3 py-2.5 rounded-xl transition-colors flex items-center justify-center shrink-0"
-                >
-                  <Plus className="w-5 h-5" />
-                </button>
+                <div className="flex gap-2 w-full sm:flex-[1]">
+                  <input 
+                    type="number" 
+                    placeholder="السعر"
+                    value={newItemPrice}
+                    onChange={e => setNewItemPrice(e.target.value)}
+                    className="flex-1 border border-gray-200 rounded-xl p-2.5 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-rose-500 outline-none transition-all min-w-0 text-center"
+                    onKeyDown={e => e.key === 'Enter' && handleAddItem()}
+                  />
+                  <button 
+                    onClick={handleAddItem}
+                    className="bg-rose-500 text-white hover:bg-rose-600 px-3 py-2.5 rounded-xl transition-colors flex items-center justify-center shrink-0"
+                  >
+                    <Plus className="w-5 h-5" />
+                  </button>
+                </div>
               </div>
               
               <div className="max-h-80 overflow-y-auto rounded-xl border border-gray-100 bg-gray-50">
@@ -359,44 +361,44 @@ export default function App() {
                   <div key={p.personId} className={`bg-white rounded-2xl shadow-sm border transition-all duration-300 ${p.isPaid ? 'border-emerald-300 ring-1 ring-emerald-300' : 'border-gray-200 hover:border-rose-300'} p-5 lg:p-7 relative overflow-hidden`}>
                     {p.isPaid && <div className="absolute top-0 right-0 bg-emerald-500 text-white text-xs font-bold px-4 py-1.5 rounded-bl-xl shadow-sm">تم الدفع</div>}
                     
-                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
-                      <h3 className="text-2xl font-bold text-gray-800 flex items-center">
-                        <div className="bg-rose-100 p-2 rounded-xl ml-3">
-                          <User className="w-6 h-6 text-rose-600" />
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4 w-full">
+                      <h3 className="text-xl sm:text-2xl font-bold text-gray-800 flex items-center break-words">
+                        <div className="bg-rose-100 p-1.5 sm:p-2 rounded-xl ml-2 sm:ml-3 shrink-0">
+                          <User className="w-5 h-5 sm:w-6 sm:h-6 text-rose-600" />
                         </div>
                         {p.personName}
                       </h3>
                       
-                      <div className="flex items-center gap-3">
-                        <label className={`flex items-center gap-2 cursor-pointer px-4 py-2 rounded-xl border transition-colors ${p.isPaid ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100'}`}>
+                      <div className="flex flex-wrap items-center gap-2 sm:gap-3 w-full sm:w-auto justify-end">
+                        <label className={`flex items-center gap-2 cursor-pointer px-3 sm:px-4 py-2 rounded-xl border transition-colors ${p.isPaid ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100'}`}>
                           <input 
                             type="checkbox" 
                             checked={p.isPaid}
                             onChange={e => updatePersonOrder(p.personId, { isPaid: e.target.checked })}
-                            className="w-5 h-5 text-emerald-500 rounded border-gray-300 focus:ring-emerald-500 cursor-pointer"
+                            className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-500 rounded border-gray-300 focus:ring-emerald-500 cursor-pointer"
                           />
-                          <span className="font-semibold">تم الدفع</span>
+                          <span className="font-semibold text-sm sm:text-base">تم الدفع</span>
                         </label>
                         <button 
                           onClick={() => removePersonOrder(p.personId)}
-                          className="bg-white border border-gray-200 text-gray-400 hover:text-red-500 hover:border-red-200 hover:bg-red-50 p-2 rounded-xl transition-all flex items-center gap-2"
+                          className="bg-white border border-gray-200 text-gray-400 hover:text-red-500 hover:border-red-200 hover:bg-red-50 p-2 rounded-xl transition-all flex items-center gap-1 sm:gap-2"
                           title="حذف الشخص من هذه الطلبات"
                         >
-                          <Trash2 className="w-5 h-5" />
+                          <Trash2 className="w-4 h-4 sm:w-5 sm:h-5" />
                           <span className="hidden sm:inline font-medium text-sm">حذف من الطلبات</span>
                         </button>
                       </div>
                     </div>
                     
                     {/* Person's Order Table */}
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-right mb-4">
+                    <div className="w-full overflow-x-auto pb-2">
+                      <table className="w-full text-right mb-4 min-w-[450px]">
                         <thead className="bg-gray-50 text-gray-500 text-sm">
                           <tr>
-                            <th className="py-3 px-4 font-medium rounded-r-xl">الصنف</th>
-                            <th className="py-3 px-4 font-medium w-32 text-center">العدد</th>
-                            <th className="py-3 px-4 font-medium w-32 text-center">الإجمالي</th>
-                            <th className="py-3 px-4 rounded-l-xl w-12"></th>
+                            <th className="py-3 px-2 sm:px-4 font-medium rounded-r-xl min-w-[150px]">الصنف</th>
+                            <th className="py-3 px-2 sm:px-4 font-medium w-32 min-w-[120px] text-center">العدد</th>
+                            <th className="py-3 px-2 sm:px-4 font-medium w-28 min-w-[100px] text-center">الإجمالي</th>
+                            <th className="py-3 px-2 sm:px-4 rounded-l-xl w-12 min-w-[48px]"></th>
                           </tr>
                         </thead>
                         <tbody>
@@ -463,8 +465,8 @@ export default function App() {
                     </button>
                     
                     {/* Person's Summary */}
-                    <div className={`rounded-xl p-5 border flex flex-col md:flex-row md:items-end justify-between gap-6 transition-all ${p.isPaid ? 'bg-emerald-50/50 border-emerald-100' : 'bg-gray-50 border-gray-200'}`}>
-                      <div className="space-y-3 flex-1">
+                    <div className={`rounded-xl p-4 sm:p-5 border flex flex-col md:flex-row md:items-end justify-between gap-4 sm:gap-6 transition-all ${p.isPaid ? 'bg-emerald-50/50 border-emerald-100' : 'bg-gray-50 border-gray-200'}`}>
+                      <div className="space-y-2 sm:space-y-3 flex-1 w-full">
                         <div className="flex justify-between text-sm text-gray-600 font-medium">
                           <span>إجمالي الطلبات:</span>
                           <span className="font-bold text-gray-800 text-base">{pTotal} ج</span>
@@ -475,11 +477,11 @@ export default function App() {
                         </div>
                         <div className="flex justify-between text-lg text-rose-600 font-bold border-t border-gray-200 pt-3 mt-1">
                           <span>الإجمالي المطلوب:</span>
-                          <span className="text-2xl">{pFinalTotal.toFixed(2)} ج</span>
+                          <span className="text-xl sm:text-2xl">{pFinalTotal.toFixed(2)} ج</span>
                         </div>
                       </div>
                       
-                      <div className="flex-1 space-y-3 border-t md:border-t-0 md:border-r border-gray-200 pt-4 md:pt-0 md:pr-6">
+                      <div className="flex-1 space-y-3 border-t md:border-t-0 md:border-r border-gray-200 pt-4 md:pt-0 md:pr-6 w-full">
                         <div>
                           <label className="block text-sm font-semibold text-gray-700 mb-2">المبلغ المدفوع</label>
                           <div className="relative">
