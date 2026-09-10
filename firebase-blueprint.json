@@ -1,0 +1,77 @@
+{
+  "entities": {
+    "Item": {
+      "title": "Item",
+      "description": "A food item with its price",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "maxLength": 100 },
+        "price": { "type": "number", "minimum": 0 },
+        "organization": { "type": "string", "maxLength": 20 }
+      },
+      "required": ["name", "price", "organization"]
+    },
+    "Person": {
+      "title": "Person",
+      "description": "A person placing an order",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "maxLength": 100 },
+        "organization": { "type": "string", "maxLength": 20 }
+      },
+      "required": ["name", "organization"]
+    },
+    "PersonOrder": {
+      "title": "PersonOrder",
+      "description": "The order details of a person",
+      "type": "object",
+      "properties": {
+        "personId": { "type": "string", "maxLength": 128 },
+        "isPaid": { "type": "boolean" },
+        "paidAmount": { "type": "number", "minimum": 0 },
+        "rows": {
+          "type": "array",
+          "items": {
+             "type": "object",
+             "properties": {
+                "id": { "type": "string", "maxLength": 128 },
+                "itemId": { "type": "string", "maxLength": 128 },
+                "quantity": { "type": "number", "minimum": 1 }
+             }
+          },
+          "maxItems": 50
+        },
+        "organization": { "type": "string", "maxLength": 20 }
+      },
+      "required": ["personId", "isPaid", "paidAmount", "rows", "organization"]
+    },
+    "SessionState": {
+      "title": "SessionState",
+      "description": "Global state like delivery fee",
+      "type": "object",
+      "properties": {
+        "deliveryFee": { "type": "number", "minimum": 0 },
+        "organization": { "type": "string", "maxLength": 20 }
+      },
+      "required": ["deliveryFee", "organization"]
+    }
+  },
+  "firestore": {
+    "/items/{itemId}": {
+      "schema": { "$ref": "#/entities/Item" },
+      "description": "Global list of available items"
+    },
+    "/people/{personId}": {
+      "schema": { "$ref": "#/entities/Person" },
+      "description": "List of people in the system"
+    },
+    "/orders/{personId}": {
+      "schema": { "$ref": "#/entities/PersonOrder" },
+      "description": "Orders associated with a person"
+    },
+    "/sessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/SessionState" },
+      "description": "Global delivery fee configuration"
+    }
+  }
+}

@@ -1,150 +1,192 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
-import React, { useState, useRef } from 'react';
-import { Plus, Trash2, UserPlus, Receipt, DollarSign, Calculator, User, Check, Download, Loader2, FileSpreadsheet } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Plus, Trash2, UserPlus, Receipt, DollarSign, Calculator, User, Check, Download, Loader2, FileSpreadsheet, LogIn, LogOut, X } from 'lucide-react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import * as XLSX from 'xlsx';
 
+import { db } from './firebase';
+import { collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, query, where } from 'firebase/firestore';
+
+const ORG_NAME = "soft-rose";
+
 type Item = { id: string; name: string; price: number };
 type OrderRow = { id: string; itemId: string; quantity: number };
-type PersonOrder = {
-  personId: string;
-  personName: string;
+type Person = { id: string; name: string };
+type PersonOrder = { 
+  personId: string; 
+  isPaid: boolean; 
+  paidAmount: number;
   rows: OrderRow[];
-  isPaid: boolean;
-  amountPaid: number;
 };
 
-const generateId = () => Math.random().toString(36).substring(2, 9);
-
-const initialNames = ["خالد عاطف", "امير", "خضر محمد", "محمد طلعت", "احمد خليفه", "سيد مصطفي", "محمد ابو المجد", "محمد عبد الفتاح", "ايمن"];
-const initialPeople = initialNames.map(name => ({ id: generateId(), name }));
+enum OperationType { CREATE = 'create', UPDATE = 'update', DELETE = 'delete', LIST = 'list', GET = 'get', WRITE = 'write' }
+function handleFirestoreError(error: any, operationType: OperationType, path: string | null) {
+  console.error('Firestore Error:', operationType, path, error);
+}
 
 export default function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [passwordInput, setPasswordInput] = useState('');
+
+  // Firestore sync state
   const [items, setItems] = useState<Item[]>([]);
-  const [availablePeople, setAvailablePeople] = useState(initialPeople);
-  const [personOrders, setPersonOrders] = useState<PersonOrder[]>([]);
+  const [people, setPeople] = useState<Person[]>([]);
+  const [orders, setOrders] = useState<PersonOrder[]>([]);
   const [deliveryFee, setDeliveryFee] = useState<number>(0);
 
-  // PDF Export
-  const printRef = useRef<HTMLDivElement>(null);
-  const [isExporting, setIsExporting] = useState(false);
-
-  // New Item State
+  // Local UI state
   const [newItemName, setNewItemName] = useState('');
-  const [newItemPrice, setNewItemPrice] = useState<string>('');
+  const [newItemPrice, setNewItemPrice] = useState('');
+  
+  // Modal state
+  const [modalPersonId, setModalPersonId] = useState<string | null>(null);
 
-  // New Person State
-  const [newPersonName, setNewPersonName] = useState('');
+  const [isExporting, setIsExporting] = useState(false);
+  const printRef = useRef<HTMLDivElement>(null);
 
-  // Select Person State
-  const [selectedPersonId, setSelectedPersonId] = useState('');
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    
+    const itemsQ = query(collection(db, 'items'), where('organization', '==', ORG_NAME));
+    const unsubItems = onSnapshot(itemsQ, (snap) => {
+      setItems(snap.docs.map(d => ({ id: d.id, ...d.data() } as Item)));
+    }, (err) => handleFirestoreError(err, OperationType.LIST, 'items'));
 
-  const handleAddItem = () => {
+    const peopleQ = query(collection(db, 'people'), where('organization', '==', ORG_NAME));
+    const unsubPeople = onSnapshot(peopleQ, (snap) => {
+      setPeople(snap.docs.map(d => ({ id: d.id, ...d.data() } as Person)));
+    }, (err) => handleFirestoreError(err, OperationType.LIST, 'people'));
+
+    const ordersQ = query(collection(db, 'orders'), where('organization', '==', ORG_NAME));
+    const unsubOrders = onSnapshot(ordersQ, (snap) => {
+      setOrders(snap.docs.map(d => ({ personId: d.id, ...d.data() } as PersonOrder)));
+    }, (err) => handleFirestoreError(err, OperationType.LIST, 'orders'));
+
+    const unsubSession = onSnapshot(doc(db, 'sessions', 'global'), (docSnap) => {
+      if (docSnap.exists()) {
+        setDeliveryFee(docSnap.data().deliveryFee || 0);
+      }
+    }, (err) => handleFirestoreError(err, OperationType.GET, 'sessions/global'));
+
+    return () => {
+      unsubItems();
+      unsubPeople();
+      unsubOrders();
+      unsubSession();
+    };
+  }, [isAuthenticated]);
+
+  const handleAddItem = async () => {
     if (!newItemName.trim() || !newItemPrice || isNaN(Number(newItemPrice))) return;
-    if (items.length >= 100) {
-      alert('الحد الأقصى للأصناف هو 100');
-      return;
+    const id = Date.now().toString();
+    try {
+      await setDoc(doc(db, 'items', id), {
+        name: newItemName.trim(),
+        price: Number(newItemPrice),
+        organization: ORG_NAME
+      });
+      setNewItemName('');
+      setNewItemPrice('');
+    } catch (e) {
+      handleFirestoreError(e, OperationType.CREATE, 'items');
     }
-    setItems([...items, { id: generateId(), name: newItemName, price: Number(newItemPrice) }]);
-    setNewItemName('');
-    setNewItemPrice('');
   };
 
-  const handleAddPerson = () => {
-    if (!newPersonName.trim()) return;
-    if (availablePeople.length >= 50) {
-      alert('الحد الأقصى للأسماء هو 50');
-      return;
+  const handleRemoveItem = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'items', id));
+    } catch (e) {
+      handleFirestoreError(e, OperationType.DELETE, 'items');
     }
-    setAvailablePeople([...availablePeople, { id: generateId(), name: newPersonName }]);
-    setNewPersonName('');
   };
 
-  const handleSelectPerson = (personId: string) => {
-    if (!personId) return;
-    const person = availablePeople.find(p => p.id === personId);
-    if (!person) return;
-    
-    if (personOrders.find(p => p.personId === personId)) {
-      setSelectedPersonId('');
-      return;
-    }
-    
-    setPersonOrders([
-      ...personOrders,
-      {
-        personId: person.id,
-        personName: person.name,
-        rows: [{ id: generateId(), itemId: '', quantity: 1 }],
+  const handleAddPerson = async (name: string) => {
+    if (!name.trim()) return null;
+    const id = Date.now().toString();
+    try {
+      await setDoc(doc(db, 'people', id), {
+        name: name.trim(),
+        organization: ORG_NAME
+      });
+      await setDoc(doc(db, 'orders', id), {
+        personId: id,
         isPaid: false,
-        amountPaid: 0
-      }
-    ]);
-    setSelectedPersonId('');
+        paidAmount: 0,
+        rows: [],
+        organization: ORG_NAME
+      });
+      return id;
+    } catch (e) {
+      handleFirestoreError(e, OperationType.CREATE, 'people');
+    }
+    return null;
   };
-
-  const updatePersonOrder = (personId: string, updates: Partial<PersonOrder>) => {
-    setPersonOrders(prev => prev.map(p => p.personId === personId ? { ...p, ...updates } : p));
-  };
-
-  const addOrderRow = (personId: string) => {
-    setPersonOrders(prev => prev.map(p => {
-      if (p.personId === personId) {
-        return { ...p, rows: [...p.rows, { id: generateId(), itemId: '', quantity: 1 }] };
-      }
-      return p;
-    }));
-  };
-
-  const updateOrderRow = (personId: string, rowId: string, updates: Partial<OrderRow>) => {
-    setPersonOrders(prev => prev.map(p => {
-      if (p.personId === personId) {
-        return {
-          ...p,
-          rows: p.rows.map(r => r.id === rowId ? { ...r, ...updates } : r)
-        };
-      }
-      return p;
-    }));
-  };
-
-  const removeOrderRow = (personId: string, rowId: string) => {
-    setPersonOrders(prev => prev.map(p => {
-      if (p.personId === personId) {
-        return { ...p, rows: p.rows.filter(r => r.id !== rowId) };
-      }
-      return p;
-    }));
-  };
-
-  const removePersonOrder = (personId: string) => {
-    if (confirm('هل أنت متأكد من حذف هذا الشخص من الطلبات؟')) {
-      setPersonOrders(prev => prev.filter(p => p.personId !== personId));
+  
+  const updateDeliveryFee = async (fee: number) => {
+    try {
+      await setDoc(doc(db, 'sessions', 'global'), {
+        deliveryFee: fee,
+        organization: ORG_NAME
+      }, { merge: true });
+    } catch (e) {
+      handleFirestoreError(e, OperationType.UPDATE, 'sessions/global');
     }
   };
 
-  // Calculations
-  const hasOrders = (p: PersonOrder) => p.rows.some(r => r.itemId && r.quantity > 0);
-  const getOrdersTotal = (p: PersonOrder) => {
-    return p.rows.reduce((sum, r) => {
-      const item = items.find(i => i.id === r.itemId);
-      return sum + (item ? item.price * r.quantity : 0);
+  const updateOrder = async (personId: string, updates: Partial<PersonOrder>) => {
+    try {
+      const order = orders.find(o => o.personId === personId);
+      if (!order) return;
+      const updatedOrder = { ...order, ...updates, organization: ORG_NAME };
+      await setDoc(doc(db, 'orders', personId), updatedOrder, { merge: true });
+    } catch (e) {
+      handleFirestoreError(e, OperationType.UPDATE, `orders/${personId}`);
+    }
+  };
+
+  const handleAddOrderRow = (personId: string) => {
+    const order = orders.find(o => o.personId === personId);
+    if (!order) return;
+    const newRow = { id: Date.now().toString(), itemId: '', quantity: 1 };
+    updateOrder(personId, { rows: [...order.rows, newRow] });
+  };
+
+  const handleUpdateOrderRow = (personId: string, rowId: string, updates: any) => {
+    const order = orders.find(o => o.personId === personId);
+    if (!order) return;
+    const updatedRows = order.rows.map(r => r.id === rowId ? { ...r, ...updates } : r);
+    updateOrder(personId, { rows: updatedRows });
+  };
+
+  const handleRemoveOrderRow = (personId: string, rowId: string) => {
+    const order = orders.find(o => o.personId === personId);
+    if (!order) return;
+    updateOrder(personId, { rows: order.rows.filter(r => r.id !== rowId) });
+  };
+
+  const handleRemoveOrder = async (personId: string) => {
+    try {
+      await deleteDoc(doc(db, 'orders', personId));
+      if (modalPersonId === personId) {
+        setModalPersonId(null);
+      }
+    } catch (e) {
+      handleFirestoreError(e, OperationType.DELETE, `orders/${personId}`);
+    }
+  };
+
+  const activeOrders = orders.filter(o => o.rows.length > 0);
+  const peopleWithOrdersCount = activeOrders.filter(o => o.rows.some(r => r.itemId && r.quantity > 0)).length;
+  const deliveryShare = peopleWithOrdersCount > 0 ? deliveryFee / peopleWithOrdersCount : 0;
+
+  const getOrdersTotal = (order: PersonOrder) => {
+    return order.rows.reduce((sum, row) => {
+      const item = items.find(i => i.id === row.itemId);
+      return sum + (item ? item.price * row.quantity : 0);
     }, 0);
   };
-
-  const peopleWithOrders = personOrders.filter(hasOrders);
-  const deliveryShare = peopleWithOrders.length > 0 ? deliveryFee / peopleWithOrders.length : 0;
-
-  const totalOrdersValue = peopleWithOrders.reduce((sum, p) => sum + getOrdersTotal(p), 0);
-  const grandTotal = totalOrdersValue + (peopleWithOrders.length > 0 ? deliveryFee : 0);
-  const paidAmount = personOrders.filter(p => p.isPaid).reduce((sum, p) => sum + getOrdersTotal(p) + (hasOrders(p) ? deliveryShare : 0), 0);
-  const remainingTotal = Math.max(0, grandTotal - paidAmount);
-  const paidPeople = personOrders.filter(p => p.isPaid);
+  
+  const hasOrders = (order: PersonOrder) => order.rows.some(r => r.itemId && r.quantity > 0);
 
   const exportToPDF = async () => {
     if (!printRef.current) return;
@@ -153,24 +195,17 @@ export default function App() {
       const canvas = await html2canvas(printRef.current, {
         scale: 2,
         useCORS: true,
-        backgroundColor: '#ffffff'
+        logging: false,
       });
-      
       const imgData = canvas.toDataURL('image/png');
-      const pdf = new jsPDF({
-        orientation: 'portrait',
-        unit: 'px',
-        format: 'a4'
-      });
-      
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
       const pdfWidth = pdf.internal.pageSize.getWidth();
       const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-      
       pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
       pdf.save('فاتورة-طلبات-سوفت-روز.pdf');
     } catch (error) {
       console.error('Error generating PDF', error);
-      alert('حدث خطأ أثناء إنشاء ملف الـ PDF');
+      alert('حدث خطأ أثناء تصدير ملف الـ PDF');
     } finally {
       setIsExporting(false);
     }
@@ -178,28 +213,31 @@ export default function App() {
 
   const exportToExcel = () => {
     try {
-      const data = [];
+      const data: any[] = [];
       data.push(["الاسم", "تفاصيل الطلبات", "نصيب التوصيل", "الإجمالي"]);
 
-      peopleWithOrders.forEach(p => {
-        const pTotal = getOrdersTotal(p);
-        const pHasOrders = hasOrders(p);
+      activeOrders.forEach(o => {
+        const pTotal = getOrdersTotal(o);
+        const pHasOrders = hasOrders(o);
         const pFinalTotal = pTotal + (pHasOrders ? deliveryShare : 0);
+        const p = people.find(person => person.id === o.personId);
+        if (!pHasOrders || !p) return;
 
-        if (!pHasOrders) return;
-
-        const details = p.rows.filter(r => r.itemId && r.quantity > 0).map(r => {
+        const details = o.rows.filter(r => r.itemId && r.quantity > 0).map(r => {
           const item = items.find(i => i.id === r.itemId);
           return item ? `${item.name} (${r.quantity})` : '';
         }).join(' + ');
 
         data.push([
-          p.personName,
+          p.name,
           details,
           pHasOrders ? deliveryShare.toFixed(2) : "0",
           pFinalTotal.toFixed(2)
         ]);
       });
+
+      const totalOrdersValue = activeOrders.reduce((sum, o) => sum + getOrdersTotal(o), 0);
+      const grandTotal = totalOrdersValue + deliveryFee;
 
       data.push([]);
       data.push(["ملخص الحساب", "", "", ""]);
@@ -220,6 +258,54 @@ export default function App() {
     }
   };
 
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#fafaf9]" dir="rtl">
+        <div className="bg-white p-10 rounded-2xl shadow-sm border border-gray-100 text-center max-w-md w-full mx-4">
+          <div className="bg-rose-50 w-20 h-20 mx-auto rounded-full flex items-center justify-center mb-6">
+            <LogIn className="w-10 h-10 text-rose-500" />
+          </div>
+          <h1 className="text-2xl font-bold text-gray-900 mb-2">طلبات سوفت روز</h1>
+          <p className="text-gray-500 mb-8">يُرجى إدخال كلمة المرور للوصول إلى النظام</p>
+          <div className="flex flex-col gap-4">
+            <input
+              type="password"
+              placeholder="كلمة المرور"
+              value={passwordInput}
+              onChange={(e) => setPasswordInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && passwordInput === '0000') {
+                  setIsAuthenticated(true);
+                } else if (e.key === 'Enter') {
+                  alert('كلمة المرور خاطئة');
+                }
+              }}
+              className="w-full border-2 border-gray-200 rounded-xl p-3 text-center text-lg outline-none focus:border-rose-500 focus:ring-2 focus:ring-rose-200 transition-all"
+            />
+            <button 
+              onClick={() => {
+                if (passwordInput === '0000') {
+                  setIsAuthenticated(true);
+                } else {
+                  alert('كلمة المرور خاطئة');
+                }
+              }}
+              className="w-full bg-rose-500 hover:bg-rose-600 text-white font-bold py-3 px-4 rounded-xl transition-colors flex items-center justify-center gap-2"
+            >
+              تسجيل الدخول
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const totalOrdersValue = activeOrders.reduce((sum, o) => sum + getOrdersTotal(o), 0);
+  const grandTotal = totalOrdersValue + deliveryFee;
+  const paidAmount = activeOrders.reduce((sum, o) => sum + (o.paidAmount || 0), 0);
+  const remainingTotal = Math.max(0, grandTotal - paidAmount);
+  const paidOrders = activeOrders.filter(o => o.isPaid);
+
   return (
     <div className="min-h-screen bg-[#fafaf9] font-sans text-gray-800 p-2 sm:p-4 md:p-8 overflow-hidden" dir="rtl">
       <div className="max-w-6xl mx-auto w-full">
@@ -227,438 +313,432 @@ export default function App() {
         {/* Header */}
         <header className="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <h1 className="text-3xl md:text-4xl font-bold text-rose-600 flex items-center">
-              <Receipt className="w-8 h-8 ml-3" />
+            <h1 className="text-3xl md:text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-l from-gray-900 to-gray-600 flex items-center gap-3">
+              <span className="bg-gray-900 text-white p-2 rounded-2xl shadow-md">
+                <Receipt className="w-8 h-8" />
+              </span>
               طلبات سوفت روز
             </h1>
             <p className="text-gray-500 mt-2 text-lg">نظام إدارة طلبات الطعام وتوزيع التكاليف الذكي</p>
           </div>
-          {peopleWithOrders.length > 0 && (
-            <div className="flex flex-col sm:flex-row gap-2 mt-4 sm:mt-0">
-              <button
-                onClick={exportToExcel}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-sm"
-              >
-                <FileSpreadsheet className="w-5 h-5" />
-                تصدير إكسيل
-              </button>
-              <button
-                onClick={exportToPDF}
-                disabled={isExporting}
-                className="bg-gray-900 hover:bg-gray-800 text-white px-5 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-sm disabled:opacity-70 disabled:cursor-not-allowed"
-              >
-                {isExporting ? <Loader2 className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}
-                {isExporting ? 'جاري التحميل...' : 'تصدير PDF'}
-              </button>
-            </div>
-          )}
+          <div className="flex flex-col sm:flex-row gap-2 mt-4 sm:mt-0 items-center">
+            <button onClick={() => { setIsAuthenticated(false); setPasswordInput(''); }} className="text-gray-500 hover:text-gray-700 bg-gray-100 px-4 py-3 rounded-xl font-medium flex items-center gap-2 w-full justify-center sm:w-auto">
+              <LogOut className="w-5 h-5" />
+              تسجيل خروج
+            </button>
+            {activeOrders.length > 0 && (
+              <>
+                <button
+                  onClick={exportToExcel}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-sm w-full sm:w-auto"
+                >
+                  <FileSpreadsheet className="w-5 h-5" />
+                  إكسيل
+                </button>
+                <button
+                  onClick={exportToPDF}
+                  disabled={isExporting}
+                  className="bg-gray-900 hover:bg-gray-800 text-white px-5 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-sm disabled:opacity-70 disabled:cursor-not-allowed w-full sm:w-auto"
+                >
+                  {isExporting ? <Loader2 className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}
+                  PDF
+                </button>
+              </>
+            )}
+          </div>
         </header>
 
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-start">
           
-          {/* Sidebar */}
-          <div className="lg:col-span-1 space-y-6">
+          <div className="lg:col-span-8 flex flex-col gap-6">
             
-            {/* Add Person to Order Section */}
-            <div className="bg-white rounded-2xl shadow-sm border border-rose-100 p-5">
-              <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center">
-                <UserPlus className="w-5 h-5 ml-2 text-rose-500" />
-                اطلب (إضافة شخص)
-              </h2>
-              
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2">اختر من الأسماء المسجلة</label>
-                <select 
-                  value={selectedPersonId}
-                  onChange={(e) => handleSelectPerson(e.target.value)}
-                  className="w-full border border-gray-200 rounded-xl p-2.5 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-rose-500 focus:border-rose-500 transition-all outline-none"
-                >
-                  <option value="">-- اختر اسماً --</option>
-                  {availablePeople.map(p => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-                </select>
-              </div>
-              
-              <div className="border-t border-gray-100 pt-4 mt-2">
-                <label className="block text-sm font-medium text-gray-700 mb-2">أو إضافة اسم جديد</label>
-                <div className="flex gap-2">
+            {/* Global Settings */}
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 lg:p-7">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+                <div className="flex-1">
+                  <h2 className="text-xl font-bold text-gray-800 mb-2 flex items-center">
+                    <DollarSign className="w-5 h-5 ml-2 text-rose-500" />
+                    تكلفة التوصيل (الدليفري)
+                  </h2>
+                  <p className="text-gray-500 text-sm">سيتم تقسيم هذا المبلغ بالتساوي على جميع الأشخاص الذين لديهم طلبات</p>
+                </div>
+                <div className="relative w-full md:w-64">
                   <input 
-                    type="text"
-                    value={newPersonName}
-                    onChange={e => setNewPersonName(e.target.value)}
-                    placeholder="اسم الشخص..."
-                    className="flex-1 border border-gray-200 rounded-xl p-2.5 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-rose-500 outline-none transition-all"
-                    onKeyDown={e => e.key === 'Enter' && handleAddPerson()}
+                    type="number" 
+                    value={deliveryFee || ''}
+                    onChange={e => updateDeliveryFee(Number(e.target.value) || 0)}
+                    className="w-full border-2 border-gray-200 rounded-xl p-3 text-2xl font-bold text-center bg-gray-50 focus:bg-white focus:ring-4 focus:ring-rose-500/20 focus:border-rose-500 outline-none transition-all"
+                    placeholder="0"
                   />
-                  <button 
-                    onClick={handleAddPerson}
-                    className="bg-gray-800 text-white hover:bg-gray-900 px-4 py-2.5 rounded-xl font-medium transition-colors"
-                  >
-                    إضافة
-                  </button>
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold">ج.م</span>
                 </div>
               </div>
             </div>
 
-            {/* Delivery Section */}
-            <div className="bg-white rounded-2xl shadow-sm border border-rose-100 p-5">
-              <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center">
-                <DollarSign className="w-5 h-5 ml-2 text-rose-500" />
-                قيمة الدليفري
-              </h2>
-              <div className="flex items-center gap-3">
-                <input 
-                  type="number"
-                  min="0"
-                  value={deliveryFee || ''}
-                  onChange={e => setDeliveryFee(Number(e.target.value))}
-                  placeholder="مثال: 30"
-                  className="flex-1 border border-gray-200 rounded-xl p-3 text-lg font-semibold bg-gray-50 focus:bg-white focus:ring-2 focus:ring-rose-500 outline-none transition-all"
-                />
-                <span className="text-gray-600 font-medium">جنيه</span>
+            {/* Active Orders Dashboard */}
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 lg:p-7">
+              <div className="flex flex-col sm:flex-row justify-between sm:items-center mb-6 gap-4">
+                <h2 className="text-xl font-bold text-gray-800 flex items-center">
+                  <Receipt className="w-5 h-5 ml-2 text-rose-500" />
+                  ملخص الطلبات الحالية
+                </h2>
+                <div className="w-full sm:w-64">
+                  <select 
+                    value=""
+                    onChange={async (e) => {
+                      const val = e.target.value;
+                      if (val === "ADD_NEW") {
+                        const name = window.prompt("أدخل اسم الشخص الجديد:");
+                        if (name) {
+                          const id = await handleAddPerson(name);
+                          if (id) setModalPersonId(id);
+                        }
+                      } else if (val) {
+                        if (!orders.find(o => o.personId === val)) {
+                          await setDoc(doc(db, 'orders', val), {
+                            personId: val,
+                            isPaid: false,
+                            paidAmount: 0,
+                            rows: [],
+                            organization: ORG_NAME
+                          });
+                        }
+                        setModalPersonId(val);
+                      }
+                    }}
+                    className="w-full p-3 border-2 border-rose-200 rounded-xl bg-rose-50 text-rose-700 font-bold cursor-pointer outline-none focus:border-rose-400 appearance-none"
+                  >
+                    <option value="" disabled hidden>+ اطلب / اختر اسم...</option>
+                    <option value="ADD_NEW" className="font-extrabold text-gray-900 bg-gray-100 text-lg">➕ أضف اسم جديد</option>
+                    {people.map(p => (
+                      <option key={p.id} value={p.id} className="text-base text-gray-800 font-medium">{p.name}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
-              {peopleWithOrders.length > 0 && deliveryFee > 0 && (
-                <div className="mt-4 text-sm text-rose-700 bg-rose-50 p-3 rounded-xl border border-rose-100">
-                  سيتم تقسيم <strong>{deliveryFee} ج</strong> على <strong>{peopleWithOrders.length} أفراد</strong>
-                  <br />
-                  نصيب الفرد: <strong>{deliveryShare.toFixed(2)} ج</strong>
+
+              {activeOrders.length === 0 ? (
+                <div className="text-center py-12 text-gray-400 border-2 border-dashed border-gray-200 rounded-xl">
+                  <UserPlus className="w-12 h-12 mx-auto mb-3 opacity-20" />
+                  <p>لا توجد طلبات حالياً. اختر اسماً للبدء.</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {activeOrders.map(o => {
+                    const p = people.find(person => person.id === o.personId);
+                    if (!p) return null;
+                    const pTotal = getOrdersTotal(o);
+                    const pHasOrders = hasOrders(o);
+                    const pFinalTotal = pTotal + (pHasOrders ? deliveryShare : 0);
+                    return (
+                      <div 
+                        key={o.personId} 
+                        onClick={() => setModalPersonId(o.personId)}
+                        className={`p-4 rounded-xl border-2 cursor-pointer transition-all hover:shadow-md ${o.isPaid ? 'bg-emerald-50 border-emerald-200' : 'bg-white border-gray-200 hover:border-rose-300'}`}
+                      >
+                        <div className="flex justify-between items-center mb-2">
+                          <h3 className="font-bold text-lg">{p.name}</h3>
+                          {o.isPaid && <Check className="w-5 h-5 text-emerald-500" />}
+                        </div>
+                        <div className="text-sm text-gray-600 mb-2 font-medium">
+                          {o.rows.length} أصناف • إجمالي: {pFinalTotal.toFixed(2)} ج
+                        </div>
+                        <div className="text-xs font-bold text-emerald-600 bg-emerald-100/50 inline-block px-2 py-1 rounded-md">
+                          تم دفع: {o.paidAmount || 0} ج
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
 
-            {/* Items Management Section */}
-            <div className="bg-white rounded-2xl shadow-sm border border-rose-100 p-5">
-              <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center">
-                <Receipt className="w-5 h-5 ml-2 text-rose-500" />
-                إدارة الأصناف
+            {/* Global Summary */}
+            <div className="bg-gray-900 text-white rounded-3xl shadow-xl p-6 sm:p-8 border border-gray-800">
+              <h2 className="text-xl sm:text-2xl font-bold mb-6 sm:mb-8 flex items-center pb-4 border-b border-gray-800">
+                <Calculator className="w-6 h-6 sm:w-7 sm:h-7 ml-3 text-rose-400" />
+                الحساب الختامي
               </h2>
               
-              <div className="flex flex-col sm:flex-row gap-2 mb-4">
-                <input 
-                  type="text" 
-                  placeholder="اسم الصنف"
-                  value={newItemName}
-                  onChange={e => setNewItemName(e.target.value)}
-                  className="w-full sm:flex-[2] border border-gray-200 rounded-xl p-2.5 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-rose-500 outline-none transition-all min-w-0"
-                  onKeyDown={e => e.key === 'Enter' && handleAddItem()}
-                />
-                <div className="flex gap-2 w-full sm:flex-[1]">
-                  <input 
-                    type="number" 
-                    placeholder="السعر"
-                    value={newItemPrice}
-                    onChange={e => setNewItemPrice(e.target.value)}
-                    className="flex-1 border border-gray-200 rounded-xl p-2.5 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-rose-500 outline-none transition-all min-w-0 text-center"
-                    onKeyDown={e => e.key === 'Enter' && handleAddItem()}
-                  />
-                  <button 
-                    onClick={handleAddItem}
-                    className="bg-rose-500 text-white hover:bg-rose-600 px-3 py-2.5 rounded-xl transition-colors flex items-center justify-center shrink-0"
-                  >
-                    <Plus className="w-5 h-5" />
-                  </button>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6 sm:mb-8">
+                <div className="bg-gray-800/80 rounded-2xl p-4 sm:p-5 border border-gray-700">
+                  <div className="text-gray-400 text-xs sm:text-sm mb-1 sm:mb-2 font-medium">الإجمالي الكلي (بدون توصيل)</div>
+                  <div className="text-2xl sm:text-3xl font-bold">{totalOrdersValue.toFixed(2)} <span className="text-sm sm:text-lg text-gray-500 font-normal">ج</span></div>
+                </div>
+                <div className="bg-gray-800/80 rounded-2xl p-4 sm:p-5 border border-gray-700">
+                  <div className="text-gray-400 text-xs sm:text-sm mb-1 sm:mb-2 font-medium">قيمة التوصيل الكلية</div>
+                  <div className="text-2xl sm:text-3xl font-bold">{deliveryFee || 0} <span className="text-sm sm:text-lg text-gray-500 font-normal">ج</span></div>
+                </div>
+                <div className="bg-gradient-to-br from-rose-900 to-rose-950 rounded-2xl p-4 sm:p-5 border border-rose-800 shadow-inner">
+                  <div className="text-rose-200 text-xs sm:text-sm mb-1 sm:mb-2 font-medium">الإجمالي العام المطلوب</div>
+                  <div className="text-3xl sm:text-4xl font-bold text-white">{grandTotal.toFixed(2)} <span className="text-lg sm:text-xl text-rose-300 font-normal">ج</span></div>
                 </div>
               </div>
               
-              <div className="max-h-80 overflow-y-auto rounded-xl border border-gray-100 bg-gray-50">
-                <table className="w-full text-right text-sm">
-                  <thead className="text-gray-500 sticky top-0 bg-gray-100 shadow-sm">
-                    <tr>
-                      <th className="py-2.5 px-3 font-medium">الصنف</th>
-                      <th className="py-2.5 px-3 font-medium w-20">السعر</th>
-                      <th className="py-2.5 px-3 w-10"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {items.length === 0 ? (
-                      <tr><td colSpan={3} className="text-center py-6 text-gray-400">لا يوجد أصناف مسجلة</td></tr>
-                    ) : items.map((item, idx) => (
-                      <tr key={item.id} className={`hover:bg-rose-50/50 transition-colors ${idx !== items.length - 1 ? 'border-b border-gray-100' : ''}`}>
-                        <td className="py-2.5 px-3 text-gray-700 font-medium">{item.name}</td>
-                        <td className="py-2.5 px-3 font-bold text-rose-600">{item.price} ج</td>
-                        <td className="py-2.5 px-3 text-left">
-                          <button 
-                            onClick={() => setItems(items.filter(i => i.id !== item.id))}
-                            className="text-gray-400 hover:text-red-500 transition-colors p-1"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="bg-gray-800/80 rounded-2xl p-4 sm:p-5 border-r-4 border-r-emerald-500 border border-gray-700">
+                  <div className="text-gray-400 text-xs sm:text-sm mb-1 sm:mb-2 font-medium">المبالغ المدفوعة (تم التحصيل)</div>
+                  <div className="text-2xl sm:text-3xl font-bold text-emerald-400">{paidAmount.toFixed(2)} <span className="text-sm sm:text-lg font-normal">ج</span></div>
+                </div>
+                <div className="bg-gray-800/80 rounded-2xl p-4 sm:p-5 border-r-4 border-r-orange-500 border border-gray-700">
+                  <div className="text-gray-400 text-xs sm:text-sm mb-1 sm:mb-2 font-medium">المتبقي للتحصيل</div>
+                  <div className="text-2xl sm:text-3xl font-bold text-orange-400">{remainingTotal.toFixed(2)} <span className="text-sm sm:text-lg font-normal">ج</span></div>
+                </div>
               </div>
             </div>
             
           </div>
 
-          {/* Main Area: Person Orders */}
-          <div className="lg:col-span-3 space-y-6">
-            {personOrders.length === 0 ? (
-              <div className="bg-white rounded-3xl border border-dashed border-rose-200 p-12 text-center flex flex-col items-center justify-center h-full min-h-[400px]">
-                <div className="w-20 h-20 bg-rose-50 text-rose-300 rounded-full flex items-center justify-center mb-4">
-                  <Receipt className="w-10 h-10" />
-                </div>
-                <h3 className="text-2xl font-bold text-gray-700 mb-2">لا توجد طلبات نشطة</h3>
-                <p className="text-gray-500">قم باختيار شخص من القائمة الجانبية للبدء بتسجيل طلباته.</p>
+          {/* Items Sidebar */}
+          <div className="lg:col-span-4 bg-white rounded-2xl shadow-sm border border-gray-100 p-5 lg:p-6 sticky top-8">
+            <h2 className="text-xl font-bold text-gray-800 mb-6 flex items-center">
+              <span className="bg-rose-100 p-1.5 rounded-lg ml-2">
+                <Plus className="w-5 h-5 text-rose-600" />
+              </span>
+              إدارة الأصناف
+            </h2>
+            
+            <div className="flex flex-col gap-3 mb-6">
+              <input 
+                type="text" 
+                placeholder="اسم الصنف"
+                value={newItemName}
+                onChange={e => setNewItemName(e.target.value)}
+                className="w-full border border-gray-200 rounded-xl p-3 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-rose-500 outline-none transition-all"
+                onKeyDown={e => e.key === 'Enter' && handleAddItem()}
+              />
+              <div className="flex gap-2 w-full">
+                <input 
+                  type="number" 
+                  placeholder="السعر"
+                  value={newItemPrice}
+                  onChange={e => setNewItemPrice(e.target.value)}
+                  className="flex-1 border border-gray-200 rounded-xl p-3 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-rose-500 outline-none transition-all text-center"
+                  onKeyDown={e => e.key === 'Enter' && handleAddItem()}
+                />
+                <button 
+                  onClick={handleAddItem}
+                  className="bg-rose-500 text-white hover:bg-rose-600 px-4 py-3 rounded-xl transition-colors flex items-center justify-center shrink-0 font-bold"
+                >
+                  إضافة
+                </button>
               </div>
-            ) : (
-              personOrders.map(p => {
-                const pTotal = getOrdersTotal(p);
-                const pHasOrders = hasOrders(p);
-                const pFinalTotal = pTotal + (pHasOrders ? deliveryShare : 0);
-                const pChange = p.amountPaid - pFinalTotal;
-                
-                return (
-                  <div key={p.personId} className={`bg-white rounded-2xl shadow-sm border transition-all duration-300 ${p.isPaid ? 'border-emerald-300 ring-1 ring-emerald-300' : 'border-gray-200 hover:border-rose-300'} p-5 lg:p-7 relative overflow-hidden`}>
-                    {p.isPaid && <div className="absolute top-0 right-0 bg-emerald-500 text-white text-xs font-bold px-4 py-1.5 rounded-bl-xl shadow-sm">تم الدفع</div>}
-                    
-                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4 w-full">
-                      <h3 className="text-xl sm:text-2xl font-bold text-gray-800 flex items-center break-words">
-                        <div className="bg-rose-100 p-1.5 sm:p-2 rounded-xl ml-2 sm:ml-3 shrink-0">
-                          <User className="w-5 h-5 sm:w-6 sm:h-6 text-rose-600" />
+            </div>
+            
+            <div className="max-h-[400px] overflow-y-auto rounded-xl border border-gray-100 bg-gray-50 p-2 scrollbar-thin">
+              {items.length === 0 ? (
+                <p className="text-gray-400 text-center py-6 text-sm font-medium">لم يتم إضافة أي أصناف بعد</p>
+              ) : (
+                <ul className="space-y-2">
+                  {items.map(item => (
+                    <li key={item.id} className="flex justify-between items-center bg-white p-3 rounded-lg border border-gray-100 shadow-sm hover:border-rose-200 transition-colors">
+                      <div className="flex-1 font-medium text-gray-700 truncate pr-2">{item.name}</div>
+                      <div className="font-bold text-gray-900 bg-gray-100 px-3 py-1 rounded-lg ml-3 shrink-0">{item.price} ج</div>
+                      <button onClick={() => handleRemoveItem(item.id)} className="text-gray-400 hover:text-red-500 transition-colors p-2 rounded-lg hover:bg-red-50 shrink-0">
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Edit Order Modal */}
+        {modalPersonId && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/60 backdrop-blur-sm p-2 sm:p-4">
+            <div className="bg-white rounded-3xl w-full max-w-4xl shadow-2xl overflow-hidden flex flex-col max-h-[95vh] sm:max-h-[90vh] animate-in fade-in zoom-in-95 duration-200">
+              
+              {/* Modal Header */}
+              <div className="flex justify-between items-center p-4 sm:p-6 border-b border-gray-100 bg-gray-50/80">
+                <h2 className="text-xl sm:text-2xl font-bold flex items-center gap-3">
+                  <div className="bg-rose-100 p-2 rounded-xl hidden sm:block">
+                    <User className="w-6 h-6 text-rose-600" />
+                  </div>
+                  {people.find(p => p.id === modalPersonId)?.name}
+                </h2>
+                <div className="flex items-center gap-2 sm:gap-3">
+                  <button 
+                    onClick={() => handleRemoveOrder(modalPersonId)}
+                    className="text-red-500 hover:bg-red-50 px-3 sm:px-4 py-2 rounded-xl font-bold flex items-center gap-2 border border-red-100 transition-colors text-sm sm:text-base"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span className="hidden sm:inline">حذف من الطلبات</span>
+                  </button>
+                  <button 
+                    onClick={() => setModalPersonId(null)}
+                    className="p-2 hover:bg-gray-200 bg-gray-100 rounded-full transition-colors text-gray-600"
+                  >
+                    <X className="w-5 h-5 sm:w-6 sm:h-6" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Modal Body */}
+              <div className="p-3 sm:p-6 overflow-y-auto flex-1 bg-[#fafaf9]">
+                <div className="space-y-3 mb-6">
+                  {orders.find(o => o.personId === modalPersonId)?.rows.map((row, index) => {
+                    const rowPrice = items.find(i => i.id === row.itemId)?.price || 0;
+                    return (
+                      <div key={row.id} className="flex flex-row items-center gap-2 sm:gap-3 bg-white p-2.5 sm:p-3 rounded-xl border border-gray-200 shadow-sm">
+                        
+                        <div className="flex items-center gap-1 sm:gap-2 flex-[2] min-w-0">
+                          <span className="font-bold text-gray-400 text-xs sm:text-sm px-1 sm:px-2 w-4 sm:w-6 shrink-0">{index + 1}</span>
+                          <select 
+                            value={row.itemId} 
+                            onChange={e => handleUpdateOrderRow(modalPersonId, row.id, { itemId: e.target.value })}
+                            className="w-full p-2 sm:p-2.5 border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-rose-500 font-medium text-sm sm:text-base bg-gray-50 truncate"
+                          >
+                            <option value="">اختر الصنف...</option>
+                            {items.map(item => (
+                              <option key={item.id} value={item.id}>{item.name}</option>
+                            ))}
+                          </select>
                         </div>
-                        {p.personName}
-                      </h3>
-                      
-                      <div className="flex flex-wrap items-center gap-2 sm:gap-3 w-full sm:w-auto justify-end">
-                        <label className={`flex items-center gap-2 cursor-pointer px-3 sm:px-4 py-2 rounded-xl border transition-colors ${p.isPaid ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100'}`}>
+                        
+                        <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+                          <span className="text-xs sm:text-sm font-medium text-gray-500 hidden sm:inline">العدد:</span>
                           <input 
-                            type="checkbox" 
-                            checked={p.isPaid}
-                            onChange={e => updatePersonOrder(p.personId, { isPaid: e.target.checked })}
-                            className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-500 rounded border-gray-300 focus:ring-emerald-500 cursor-pointer"
+                            type="number" 
+                            min="1" 
+                            value={row.quantity || ''} 
+                            onChange={e => handleUpdateOrderRow(modalPersonId, row.id, { quantity: Number(e.target.value) || 0 })}
+                            className="w-14 sm:w-16 p-2 sm:p-2.5 border border-gray-300 rounded-lg text-center outline-none focus:ring-2 focus:ring-rose-500 font-bold bg-gray-50" 
                           />
-                          <span className="font-semibold text-sm sm:text-base">تم الدفع</span>
-                        </label>
+                        </div>
+                        
+                        <div className="shrink-0 w-20 sm:w-24 text-center font-bold text-base sm:text-lg text-gray-800 bg-gray-100 p-2 rounded-lg border border-gray-200 whitespace-nowrap">
+                          {rowPrice * row.quantity} ج
+                        </div>
+                        
                         <button 
-                          onClick={() => removePersonOrder(p.personId)}
-                          className="bg-white border border-gray-200 text-gray-400 hover:text-red-500 hover:border-red-200 hover:bg-red-50 p-2 rounded-xl transition-all flex items-center gap-1 sm:gap-2"
-                          title="حذف الشخص من هذه الطلبات"
+                          onClick={() => handleRemoveOrderRow(modalPersonId, row.id)}
+                          className="p-2 text-red-500 hover:bg-red-100 rounded-lg shrink-0 transition-colors bg-red-50/50"
+                          title="حذف هذا الصنف"
                         >
                           <Trash2 className="w-4 h-4 sm:w-5 sm:h-5" />
-                          <span className="hidden sm:inline font-medium text-sm">حذف من الطلبات</span>
                         </button>
                       </div>
-                    </div>
-                    
-                    {/* Person's Order Table */}
-                    <div className="w-full overflow-x-auto pb-2">
-                      <table className="w-full text-right mb-4 min-w-[450px]">
-                        <thead className="bg-gray-50 text-gray-500 text-sm">
-                          <tr>
-                            <th className="py-3 px-2 sm:px-4 font-medium rounded-r-xl min-w-[150px]">الصنف</th>
-                            <th className="py-3 px-2 sm:px-4 font-medium w-32 min-w-[120px] text-center">العدد</th>
-                            <th className="py-3 px-2 sm:px-4 font-medium w-28 min-w-[100px] text-center">الإجمالي</th>
-                            <th className="py-3 px-2 sm:px-4 rounded-l-xl w-12 min-w-[48px]"></th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {p.rows.map(row => {
-                            const rowItem = items.find(i => i.id === row.itemId);
-                            const rowTotal = rowItem ? rowItem.price * row.quantity : 0;
-                            return (
-                              <tr key={row.id} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
-                                <td className="py-3 px-2">
-                                  <select 
-                                    value={row.itemId}
-                                    onChange={e => updateOrderRow(p.personId, row.id, { itemId: e.target.value })}
-                                    className="w-full border border-gray-200 rounded-lg p-2.5 bg-white focus:ring-2 focus:ring-rose-500 focus:border-rose-500 outline-none transition-all"
-                                  >
-                                    <option value="">اختر صنفاً</option>
-                                    {items.map(i => <option key={i.id} value={i.id}>{i.name} ({i.price} ج)</option>)}
-                                  </select>
-                                </td>
-                                <td className="py-3 px-2">
-                                  <div className="flex items-center justify-center gap-1">
-                                    <button 
-                                      onClick={() => updateOrderRow(p.personId, row.id, { quantity: Math.max(1, row.quantity - 1) })}
-                                      className="w-8 h-8 flex items-center justify-center bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg transition-colors"
-                                    >
-                                      -
-                                    </button>
-                                    <input 
-                                      type="number" 
-                                      min="1"
-                                      value={row.quantity || ''}
-                                      onChange={e => {
-                                        const val = e.target.value === '' ? 0 : Number(e.target.value);
-                                        updateOrderRow(p.personId, row.id, { quantity: val });
-                                      }}
-                                      className="w-14 border border-gray-200 rounded-lg p-1.5 text-center bg-white focus:ring-2 focus:ring-rose-500 focus:border-rose-500 outline-none transition-all"
-                                    />
-                                    <button 
-                                      onClick={() => updateOrderRow(p.personId, row.id, { quantity: row.quantity + 1 })}
-                                      className="w-8 h-8 flex items-center justify-center bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg transition-colors"
-                                    >
-                                      +
-                                    </button>
-                                  </div>
-                                </td>
-                                <td className="py-3 px-2 font-bold text-gray-800 text-center text-lg">{rowTotal} ج</td>
-                                <td className="py-3 px-2 text-left">
-                                  <button onClick={() => removeOrderRow(p.personId, row.id)} className="text-gray-400 hover:text-red-500 transition-colors p-1.5 rounded-lg hover:bg-red-50 flex items-center gap-1 mx-auto" title="حذف هذا الصنف من الطلب">
-                                    <Trash2 className="w-5 h-5" />
-                                  </button>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                    
-                    <button 
-                      onClick={() => addOrderRow(p.personId)}
-                      className="text-sm bg-rose-50 text-rose-600 font-medium hover:bg-rose-100 hover:text-rose-700 flex items-center mb-8 px-4 py-2 rounded-lg transition-colors"
-                    >
-                      <Plus className="w-4 h-4 ml-1.5" />
-                      إضافة صنف
-                    </button>
-                    
-                    {/* Person's Summary */}
-                    <div className={`rounded-xl p-4 sm:p-5 border flex flex-col md:flex-row md:items-end justify-between gap-4 sm:gap-6 transition-all ${p.isPaid ? 'bg-emerald-50/50 border-emerald-100' : 'bg-gray-50 border-gray-200'}`}>
-                      <div className="space-y-2 sm:space-y-3 flex-1 w-full">
-                        <div className="flex justify-between text-sm text-gray-600 font-medium">
+                    );
+                  })}
+                  
+                  <button 
+                    onClick={() => handleAddOrderRow(modalPersonId)} 
+                    className="w-full py-4 border-2 border-dashed border-rose-300 text-rose-600 font-bold rounded-xl hover:bg-rose-50 transition-colors flex items-center justify-center gap-2 bg-white"
+                  >
+                    <Plus className="w-5 h-5" />
+                    إضافة صنف
+                  </button>
+                </div>
+              </div>
+
+              {/* Modal Footer Summary */}
+              {(() => {
+                const order = orders.find(o => o.personId === modalPersonId);
+                if (!order) return null;
+                const pTotal = getOrdersTotal(order);
+                const pHasOrders = hasOrders(order);
+                const pFinalTotal = pTotal + (pHasOrders ? deliveryShare : 0);
+
+                return (
+                  <div className="bg-gray-100 p-4 sm:p-6 border-t border-gray-200 rounded-b-3xl">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6 items-end">
+                      
+                      <div className="space-y-3 sm:space-y-4 bg-white p-4 sm:p-5 rounded-2xl border border-gray-200 shadow-sm">
+                        <div className="flex justify-between text-gray-600 font-medium text-sm sm:text-base">
                           <span>إجمالي الطلبات:</span>
-                          <span className="font-bold text-gray-800 text-base">{pTotal} ج</span>
+                          <span className="font-bold text-gray-900 text-base sm:text-lg">{pTotal} ج</span>
                         </div>
-                        <div className="flex justify-between text-sm text-gray-600 font-medium">
+                        <div className="flex justify-between text-gray-600 font-medium pb-3 sm:pb-4 border-b border-gray-100 text-sm sm:text-base">
                           <span>نصيب التوصيل:</span>
-                          <span className="font-bold text-gray-800 text-base">{pHasOrders ? deliveryShare.toFixed(2) : 0} ج</span>
+                          <span className="font-bold text-gray-900 text-base sm:text-lg">{pHasOrders ? deliveryShare.toFixed(2) : '0'} ج</span>
                         </div>
-                        <div className="flex justify-between text-lg text-rose-600 font-bold border-t border-gray-200 pt-3 mt-1">
+                        <div className="flex justify-between text-lg sm:text-xl font-bold text-rose-600 pt-1 sm:pt-2">
                           <span>الإجمالي المطلوب:</span>
                           <span className="text-xl sm:text-2xl">{pFinalTotal.toFixed(2)} ج</span>
                         </div>
                       </div>
                       
-                      <div className="flex-1 space-y-3 border-t md:border-t-0 md:border-r border-gray-200 pt-4 md:pt-0 md:pr-6 w-full">
-                        <div>
-                          <label className="block text-sm font-semibold text-gray-700 mb-2">المبلغ المدفوع</label>
+                      <div className="space-y-3 sm:space-y-4">
+                        <label className={`flex items-center justify-between p-3 sm:p-4 rounded-xl border-2 transition-colors cursor-pointer ${order.isPaid ? 'bg-emerald-50 border-emerald-400 text-emerald-900' : 'bg-white border-gray-200 hover:border-gray-300'}`}>
+                          <span className="font-bold text-base sm:text-lg flex items-center gap-2">
+                            <input 
+                              type="checkbox" 
+                              checked={order.isPaid} 
+                              onChange={e => updateOrder(order.personId, { isPaid: e.target.checked })} 
+                              className="w-5 h-5 sm:w-6 sm:h-6 rounded text-emerald-500 focus:ring-emerald-500 cursor-pointer" 
+                            />
+                            تم الدفع بالكامل
+                          </span>
+                        </label>
+                        
+                        <div className="bg-white p-3 sm:p-4 rounded-xl border-2 border-gray-200 flex items-center justify-between gap-2 sm:gap-4 focus-within:border-gray-400 transition-colors">
+                          <span className="font-bold text-gray-700 text-sm sm:text-base whitespace-nowrap">المبلغ المدفوع:</span>
                           <div className="relative">
                             <input 
-                              type="number"
-                              min="0"
-                              value={p.amountPaid || ''}
-                              onChange={e => updatePersonOrder(p.personId, { amountPaid: Number(e.target.value) })}
+                              type="number" 
+                              value={order.paidAmount || ''} 
+                              onChange={e => updateOrder(order.personId, { paidAmount: Number(e.target.value) || 0 })} 
+                              className="w-24 sm:w-32 p-2 pl-6 sm:pl-8 border-2 border-gray-100 rounded-lg text-center font-bold text-lg sm:text-xl outline-none focus:border-rose-300 transition-colors bg-gray-50 focus:bg-white" 
                               placeholder="0"
-                              className="w-full border border-gray-300 rounded-xl p-3 pr-10 focus:ring-2 focus:ring-rose-500 font-bold text-lg bg-white outline-none transition-all"
                             />
-                            <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 font-medium">ج</span>
+                            <span className="absolute left-2 sm:left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-xs sm:text-sm">ج</span>
                           </div>
                         </div>
-                        {p.amountPaid > 0 && (
-                          <div className={`font-bold flex justify-between p-3 rounded-xl border ${pChange >= 0 ? 'bg-emerald-100/50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
-                            <span>الباقي له:</span>
-                            <span className="text-xl">{pChange >= 0 ? pChange.toFixed(2) : 0} ج</span>
-                          </div>
-                        )}
                       </div>
+
                     </div>
                   </div>
                 );
-              })
-            )}
-
-            {/* Global Summary */}
-            <div className="bg-gray-900 text-white rounded-3xl shadow-xl p-8 mt-8 border border-gray-800">
-              <h2 className="text-2xl font-bold mb-8 flex items-center pb-5 border-b border-gray-800">
-                <Calculator className="w-7 h-7 ml-3 text-rose-400" />
-                الحساب الختامي
-              </h2>
-              
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6 mb-8">
-                <div className="bg-gray-800/80 rounded-2xl p-5 border border-gray-700">
-                  <div className="text-gray-400 text-sm mb-2 font-medium">الإجمالي الكلي (بدون توصيل)</div>
-                  <div className="text-3xl font-bold">{totalOrdersValue.toFixed(2)} <span className="text-lg text-gray-500 font-normal">ج</span></div>
-                </div>
-                <div className="bg-gray-800/80 rounded-2xl p-5 border border-gray-700">
-                  <div className="text-gray-400 text-sm mb-2 font-medium">قيمة التوصيل الكلية</div>
-                  <div className="text-3xl font-bold">{deliveryFee || 0} <span className="text-lg text-gray-500 font-normal">ج</span></div>
-                </div>
-                <div className="bg-gradient-to-br from-rose-900 to-rose-950 rounded-2xl p-5 border border-rose-800 shadow-inner">
-                  <div className="text-rose-200 text-sm mb-2 font-medium">الإجمالي العام المطلوب</div>
-                  <div className="text-4xl font-bold text-white">{grandTotal.toFixed(2)} <span className="text-xl text-rose-300 font-normal">ج</span></div>
-                </div>
-              </div>
-              
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
-                <div className="bg-gray-800/80 rounded-2xl p-5 border-r-4 border-r-emerald-500 border border-gray-700">
-                  <div className="text-gray-400 text-sm mb-2 font-medium">المبالغ المدفوعة (تم التحصيل)</div>
-                  <div className="text-3xl font-bold text-emerald-400">{paidAmount.toFixed(2)} <span className="text-lg font-normal">ج</span></div>
-                </div>
-                <div className="bg-gray-800/80 rounded-2xl p-5 border-r-4 border-r-orange-500 border border-gray-700">
-                  <div className="text-gray-400 text-sm mb-2 font-medium">المتبقي للتحصيل</div>
-                  <div className="text-3xl font-bold text-orange-400">{remainingTotal.toFixed(2)} <span className="text-lg font-normal">ج</span></div>
-                </div>
-              </div>
-              
-              {paidPeople.length > 0 && (
-                <div className="mt-8 pt-6 border-t border-gray-800">
-                  <h3 className="text-lg font-medium text-gray-300 mb-4 flex items-center">
-                    <Check className="w-5 h-5 ml-2 text-emerald-400" />
-                    الطلبات المدفوعة:
-                  </h3>
-                  <div className="flex flex-wrap gap-2.5">
-                    {paidPeople.map(p => (
-                      <span key={p.personId} className="bg-gray-800/80 text-emerald-300 px-4 py-2 rounded-xl text-sm font-medium border border-emerald-900/50 flex items-center">
-                        {p.personName}
-                        <Check className="w-3 h-3 mr-2 opacity-70" />
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
+              })()}
             </div>
-            
           </div>
-        </div>
+        )}
 
         {/* Hidden Printable PDF Layout */}
         <div className="absolute top-0 right-0 -z-50 opacity-0 pointer-events-none overflow-hidden h-0 w-0">
-          <div ref={printRef} className="w-[800px] h-auto bg-white p-10 text-gray-900 font-sans" dir="rtl">
-            <div className="text-center mb-8 border-b-2 border-gray-200 pb-6">
-              <h1 className="text-4xl font-bold text-gray-900 mb-2">فاتورة طلبات سوفت روز</h1>
-              <p className="text-gray-500 text-lg font-medium">تاريخ الإصدار: {new Date().toLocaleDateString('ar-EG')}</p>
+          <div ref={printRef} className="w-[800px] h-auto p-10 font-sans" dir="rtl" style={{ backgroundColor: '#ffffff', color: '#111827' }}>
+            <div className="text-center mb-8 border-b-2 pb-6" style={{ borderColor: '#e5e7eb' }}>
+              <h1 className="text-4xl font-bold mb-2" style={{ color: '#111827' }}>فاتورة طلبات سوفت روز</h1>
+              <p className="text-lg font-medium" style={{ color: '#6b7280' }}>تاريخ الإصدار: {new Date().toLocaleDateString('ar-EG')}</p>
             </div>
-
             <table className="w-full text-right mb-8 border-collapse">
               <thead>
-                <tr className="bg-gray-100 border-y-2 border-gray-300">
-                  <th className="py-3 px-4 font-bold border-l border-gray-200 text-lg">الاسم</th>
-                  <th className="py-3 px-4 font-bold border-l border-gray-200 text-lg">تفاصيل الطلبات</th>
-                  <th className="py-3 px-4 font-bold border-l border-gray-200 w-32 text-center text-lg">التوصيل</th>
+                <tr className="border-y-2" style={{ backgroundColor: '#f3f4f6', borderColor: '#d1d5db' }}>
+                  <th className="py-3 px-4 font-bold border-l text-lg" style={{ borderColor: '#e5e7eb' }}>الاسم</th>
+                  <th className="py-3 px-4 font-bold border-l text-lg" style={{ borderColor: '#e5e7eb' }}>تفاصيل الطلبات</th>
+                  <th className="py-3 px-4 font-bold border-l w-32 text-center text-lg" style={{ borderColor: '#e5e7eb' }}>التوصيل</th>
                   <th className="py-3 px-4 font-bold w-32 text-center text-lg">الإجمالي</th>
                 </tr>
               </thead>
               <tbody>
-                {peopleWithOrders.map(p => {
-                  const pTotal = getOrdersTotal(p);
-                  const pHasOrders = hasOrders(p);
+                {activeOrders.map(o => {
+                  const p = people.find(person => person.id === o.personId);
+                  if (!p) return null;
+                  const pTotal = getOrdersTotal(o);
+                  const pHasOrders = hasOrders(o);
                   const pFinalTotal = pTotal + (pHasOrders ? deliveryShare : 0);
                   if (!pHasOrders) return null;
                   
                   return (
-                    <tr key={p.personId} className="border-b border-gray-200">
-                      <td className="py-4 px-4 font-bold align-top border-l border-gray-200 text-lg">{p.personName}</td>
-                      <td className="py-4 px-4 align-top border-l border-gray-200">
+                    <tr key={o.personId} className="border-b" style={{ borderColor: '#e5e7eb' }}>
+                      <td className="py-4 px-4 font-bold align-top border-l text-lg" style={{ borderColor: '#e5e7eb' }}>{p.name}</td>
+                      <td className="py-4 px-4 align-top border-l" style={{ borderColor: '#e5e7eb' }}>
                         <ul className="space-y-2">
-                          {p.rows.filter(r => r.itemId && r.quantity > 0).map(r => {
+                          {o.rows.filter(r => r.itemId && r.quantity > 0).map(r => {
                             const item = items.find(i => i.id === r.itemId);
                             if (!item) return null;
                             return (
                               <li key={r.id} className="flex justify-between text-base">
-                                <span>{item.name} <span className="text-gray-400 mx-1">×</span> {r.quantity}</span>
+                                <span>{item.name} <span className="mx-1" style={{ color: '#9ca3af' }}>×</span> {r.quantity}</span>
                                 <span className="font-bold">{item.price * r.quantity} ج</span>
                               </li>
                             );
                           })}
                         </ul>
                       </td>
-                      <td className="py-4 px-4 align-middle text-center border-l border-gray-200 font-bold text-lg text-gray-600">
+                      <td className="py-4 px-4 align-middle text-center border-l font-bold text-lg" style={{ borderColor: '#e5e7eb', color: '#4b5563' }}>
                         {pHasOrders ? deliveryShare.toFixed(2) : 0} ج
                       </td>
                       <td className="py-4 px-4 align-middle text-center font-bold text-2xl">
@@ -669,19 +749,18 @@ export default function App() {
                 })}
               </tbody>
             </table>
-
             <div className="flex justify-end mt-8">
-              <div className="w-96 bg-gray-50 p-6 rounded-2xl border-2 border-gray-200">
-                <h3 className="text-2xl font-bold mb-4 border-b pb-3 border-gray-200">ملخص الحساب</h3>
-                <div className="flex justify-between mb-3 text-gray-700 text-lg font-medium">
+              <div className="w-96 p-6 rounded-2xl border-2" style={{ backgroundColor: '#f9fafb', borderColor: '#e5e7eb' }}>
+                <h3 className="text-2xl font-bold mb-4 border-b pb-3" style={{ borderColor: '#e5e7eb' }}>ملخص الحساب</h3>
+                <div className="flex justify-between mb-3 text-lg font-medium" style={{ color: '#374151' }}>
                   <span>إجمالي قيمة الطلبات:</span>
                   <span className="font-bold">{totalOrdersValue.toFixed(2)} ج</span>
                 </div>
-                <div className="flex justify-between mb-3 text-gray-700 text-lg font-medium">
+                <div className="flex justify-between mb-3 text-lg font-medium" style={{ color: '#374151' }}>
                   <span>إجمالي التوصيل:</span>
                   <span className="font-bold">{deliveryFee} ج</span>
                 </div>
-                <div className="flex justify-between mt-5 pt-5 border-t-2 border-gray-900 text-2xl font-bold">
+                <div className="flex justify-between mt-5 pt-5 border-t-2 text-2xl font-bold" style={{ borderColor: '#111827' }}>
                   <span>الإجمالي العام:</span>
                   <span>{grandTotal.toFixed(2)} ج</span>
                 </div>
@@ -689,9 +768,7 @@ export default function App() {
             </div>
           </div>
         </div>
-
       </div>
     </div>
   );
 }
-

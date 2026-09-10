@@ -1,0 +1,75 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} { allow read, write: if false; }
+    
+    function isSignedIn() { return true; }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    
+    function isValidId(id) { 
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); 
+    }
+    
+    // Items
+    function isValidItem(data) {
+      return data.keys().hasAll(['name', 'price', 'organization']) &&
+             data.keys().size() == 3 &&
+             data.name is string && data.name.size() <= 100 &&
+             data.price is number && data.price >= 0 &&
+             data.organization == "soft-rose";
+    }
+    match /items/{itemId} {
+      allow read, list: if isSignedIn() && resource.data.organization == "soft-rose";
+      allow create: if isSignedIn() && isValidId(itemId) && isValidItem(incoming());
+      allow update: if isSignedIn() && isValidId(itemId) && isValidItem(incoming()) && incoming().organization == existing().organization;
+      allow delete: if isSignedIn() && resource.data.organization == "soft-rose";
+    }
+    
+    // People
+    function isValidPerson(data) {
+      return data.keys().hasAll(['name', 'organization']) &&
+             data.keys().size() == 2 &&
+             data.name is string && data.name.size() <= 100 &&
+             data.organization == "soft-rose";
+    }
+    match /people/{personId} {
+      allow read, list: if isSignedIn() && resource.data.organization == "soft-rose";
+      allow create: if isSignedIn() && isValidId(personId) && isValidPerson(incoming());
+      allow update: if isSignedIn() && isValidId(personId) && isValidPerson(incoming()) && incoming().organization == existing().organization;
+      allow delete: if isSignedIn() && resource.data.organization == "soft-rose";
+    }
+    
+    // Orders
+    function isValidOrder(data) {
+      return data.keys().hasAll(['personId', 'isPaid', 'paidAmount', 'rows', 'organization']) &&
+             data.keys().size() == 5 &&
+             data.personId is string && data.personId.size() <= 128 &&
+             data.isPaid is bool &&
+             data.paidAmount is number && data.paidAmount >= 0 &&
+             data.rows is list && data.rows.size() <= 50 &&
+             (data.rows.size() == 0 || (data.rows[0] is map && data.rows[0].keys().hasAll(['id', 'itemId', 'quantity']))) &&
+             data.organization == "soft-rose";
+    }
+    match /orders/{personId} {
+      allow read, list: if isSignedIn() && resource.data.organization == "soft-rose";
+      allow create: if isSignedIn() && isValidId(personId) && isValidOrder(incoming()) && exists(/databases/$(database)/documents/people/$(personId));
+      allow update: if isSignedIn() && isValidId(personId) && isValidOrder(incoming()) && incoming().organization == existing().organization;
+      allow delete: if isSignedIn() && resource.data.organization == "soft-rose";
+    }
+    
+    // Sessions
+    function isValidSession(data) {
+      return data.keys().hasAll(['deliveryFee', 'organization']) &&
+             data.keys().size() == 2 &&
+             data.deliveryFee is number && data.deliveryFee >= 0 &&
+             data.organization == "soft-rose";
+    }
+    match /sessions/{sessionId} {
+      allow read, list: if isSignedIn() && resource.data.organization == "soft-rose";
+      allow create: if isSignedIn() && isValidId(sessionId) && isValidSession(incoming());
+      allow update: if isSignedIn() && isValidId(sessionId) && isValidSession(incoming()) && incoming().organization == existing().organization;
+      allow delete: if isSignedIn() && resource.data.organization == "soft-rose";
+    }
+  }
+}
