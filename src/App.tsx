@@ -4,9 +4,10 @@
  */
 
 import React, { useState, useRef } from 'react';
-import { Plus, Trash2, UserPlus, Receipt, DollarSign, Calculator, User, Check, Download, Loader2 } from 'lucide-react';
+import { Plus, Trash2, UserPlus, Receipt, DollarSign, Calculator, User, Check, Download, Loader2, FileSpreadsheet } from 'lucide-react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
+import * as XLSX from 'xlsx';
 
 type Item = { id: string; name: string; price: number };
 type OrderRow = { id: string; itemId: string; quantity: number };
@@ -175,6 +176,50 @@ export default function App() {
     }
   };
 
+  const exportToExcel = () => {
+    try {
+      const data = [];
+      data.push(["الاسم", "تفاصيل الطلبات", "نصيب التوصيل", "الإجمالي"]);
+
+      peopleWithOrders.forEach(p => {
+        const pTotal = getOrdersTotal(p);
+        const pHasOrders = hasOrders(p);
+        const pFinalTotal = pTotal + (pHasOrders ? deliveryShare : 0);
+
+        if (!pHasOrders) return;
+
+        const details = p.rows.filter(r => r.itemId && r.quantity > 0).map(r => {
+          const item = items.find(i => i.id === r.itemId);
+          return item ? `${item.name} (${r.quantity})` : '';
+        }).join(' + ');
+
+        data.push([
+          p.personName,
+          details,
+          pHasOrders ? deliveryShare.toFixed(2) : "0",
+          pFinalTotal.toFixed(2)
+        ]);
+      });
+
+      data.push([]);
+      data.push(["ملخص الحساب", "", "", ""]);
+      data.push(["إجمالي قيمة الطلبات", totalOrdersValue.toFixed(2) + " ج", "", ""]);
+      data.push(["إجمالي التوصيل", deliveryFee + " ج", "", ""]);
+      data.push(["الإجمالي العام المطلوب", grandTotal.toFixed(2) + " ج", "", ""]);
+
+      const ws = XLSX.utils.aoa_to_sheet(data);
+      if (!ws['!views']) ws['!views'] = [];
+      ws['!views'].push({ rightToLeft: true });
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "الطلبات");
+      XLSX.writeFile(wb, "فاتورة-طلبات-سوفت-روز.xlsx");
+    } catch (error) {
+      console.error('Error generating Excel', error);
+      alert('حدث خطأ أثناء تصدير ملف الإكسيل');
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#fafaf9] font-sans text-gray-800 p-2 sm:p-4 md:p-8 overflow-hidden" dir="rtl">
       <div className="max-w-6xl mx-auto w-full">
@@ -189,14 +234,23 @@ export default function App() {
             <p className="text-gray-500 mt-2 text-lg">نظام إدارة طلبات الطعام وتوزيع التكاليف الذكي</p>
           </div>
           {peopleWithOrders.length > 0 && (
-            <button
-              onClick={exportToPDF}
-              disabled={isExporting}
-              className="bg-gray-900 hover:bg-gray-800 text-white px-5 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-sm disabled:opacity-70 disabled:cursor-not-allowed"
-            >
-              {isExporting ? <Loader2 className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}
-              {isExporting ? 'جاري التحميل...' : 'تصدير كـ PDF'}
-            </button>
+            <div className="flex flex-col sm:flex-row gap-2 mt-4 sm:mt-0">
+              <button
+                onClick={exportToExcel}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-sm"
+              >
+                <FileSpreadsheet className="w-5 h-5" />
+                تصدير إكسيل
+              </button>
+              <button
+                onClick={exportToPDF}
+                disabled={isExporting}
+                className="bg-gray-900 hover:bg-gray-800 text-white px-5 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-sm disabled:opacity-70 disabled:cursor-not-allowed"
+              >
+                {isExporting ? <Loader2 className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}
+                {isExporting ? 'جاري التحميل...' : 'تصدير PDF'}
+              </button>
+            </div>
           )}
         </header>
 
@@ -564,8 +618,8 @@ export default function App() {
         </div>
 
         {/* Hidden Printable PDF Layout */}
-        <div className="absolute top-0 right-0 -z-50 opacity-0 pointer-events-none">
-          <div ref={printRef} className="w-[800px] bg-white p-10 text-gray-900 font-sans" dir="rtl">
+        <div className="absolute top-0 right-0 -z-50 opacity-0 pointer-events-none overflow-hidden h-0 w-0">
+          <div ref={printRef} className="w-[800px] h-auto bg-white p-10 text-gray-900 font-sans" dir="rtl">
             <div className="text-center mb-8 border-b-2 border-gray-200 pb-6">
               <h1 className="text-4xl font-bold text-gray-900 mb-2">فاتورة طلبات سوفت روز</h1>
               <p className="text-gray-500 text-lg font-medium">تاريخ الإصدار: {new Date().toLocaleDateString('ar-EG')}</p>
